@@ -122,4 +122,285 @@ When answering questions:
 
 ---
 
-*18 resources · 7 use case groups · 4 resource type categories*
+## 🗒 Notebook Scaffold Templates
+
+> Copy-paste starting points for each Medallion layer. Assumes a Spark cluster is attached and catalogs/schemas are pre-configured.
+
+---
+
+### 🥉 Bronze – Raw Ingestion
+
+```python
+# ============================================================
+# BRONZE LAYER – Raw Ingestion
+# Purpose: Land raw source data into object storage as-is,
+#          partition by ingest date, register in catalog.
+# ============================================================
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import current_timestamp, lit
+from datetime import date
+
+spark = SparkSession.builder.appName("bronze_ingestion").getOrCreate()
+
+# --- CONFIG -------------------------------------------------
+SOURCE_PATH    = "oci://your-bucket@namespace/raw/your_file.csv"
+BRONZE_CATALOG = "your_catalog"
+BRONZE_SCHEMA  = "bronze"
+BRONZE_TABLE   = "your_table_name"
+INGEST_DATE    = str(date.today())   # e.g. "2026-03-11"
+# ------------------------------------------------------------
+
+# Read raw source (adjust format/options as needed)
+df_raw = (spark.read
+    .format("csv")
+    .option("header", True)
+    .option("inferSchema", True)
+    .load(SOURCE_PATH))
+
+# Add audit columns
+df_bronze = (df_raw
+    .withColumn("_ingest_timestamp", current_timestamp())
+    .withColumn("_ingest_date", lit(INGEST_DATE))
+    .withColumn("_source_file", lit(SOURCE_PATH)))
+
+# Write to Bronze catalog as Delta table (append)
+(df_bronze.write
+    .format("delta")
+    .mode("append")
+    .partitionBy("_ingest_date")
+    .saveAsTable(f"{BRONZE_CATALOG}.{BRONZE_SCHEMA}.{BRONZE_TABLE}"))
+
+print(f"✅ Bronze ingestion complete: {df_bronze.count()} rows written.")
+spark.sql(f"SELECT * FROM {BRONZE_CATALOG}.{BRONZE_SCHEMA}.{BRONZE_TABLE} LIMIT 10").show()
+```
+
+---
+
+### 🥈 Silver – Transformation & Validation
+
+```python
+# ============================================================
+# SILVER LAYER – Transformation & Validation
+# Purpose: Cleanse, deduplicate, validate, and optionally
+#          enrich data with GenAI augmentation.
+# ============================================================
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, trim, upper, when, current_timestamp,
+    row_number
+)
+from pyspark.sql.window import Window
+
+spark = SparkSession.builder.appName("silver_transform").getOrCreate()
+
+# --- CONFIG -------------------------------------------------
+BRONZE_CATALOG  = "your_catalog"
+BRONZE_SCHEMA   = "bronze"
+BRONZE_TABLE    = "your_table_name"
+
+SILVER_CATALOG  = "your_catalog"
+SILVER_SCHEMA   = "silver"
+SILVER_TABLE    = "your_table_name_clean"
+
+DEDUP_KEY       = "id"          # Primary key column for deduplication
+PARTITION_COL   = "_ingest_date"
+# ------------------------------------------------------------
+
+df_bronze = spark.table(f"{BRONZE_CATALOG}.{BRONZE_SCHEMA}.{BRONZE_TABLE}")
+
+# --- 1. Cleanse ---------------------------------------------
+df_clean = (df_bronze
+    .withColumn("name", trim(upper(col("name"))))   # adjust to your columns
+    .filter(col(DEDUP_KEY).isNotNull()))
+
+# --- 2. Deduplicate (keep latest by ingest timestamp) -------
+window = Window.partitionBy(DEDUP_KEY).orderBy(col("_ingest_timestamp").desc())
+df_dedup = (df_clean
+    .withColumn("_row_num", row_number().over(window))
+    .filter(col("_row_num") == 1)
+    .drop("_row_num"))
+
+# --- 3. Validate (flag bad rows) ----------------------------
+df_validated = df_dedup.withColumn(
+    "_quality_flag",
+    when(col("name").isNull(), "MISSING_NAME")    # extend with your rules
+    .otherwise("OK"))
+
+# --- 4. (Optional) GenAI Augmentation -----------------------
+# Example: call OCI GenAI or a registered model to add a
+# sentiment / classification column. Uncomment to activate.
+#
+# from pyspark.sql.functions import udf
+# from pyspark.sql.types import StringType
+# import oci
+#
+# def call_genai(text):
+#     # Insert OCI GenAI API call here
+#     return "POSITIVE"
+#
+# genai_udf = udf(call_genai, StringType())
+# df_validated = df_validated.withColumn("_sentiment", genai_udf(col("description")))
+
+# --- 5. Write Silver ----------------------------------------
+df_silver = df_validated.withColumn("_silver_timestamp", current_timestamp())
+
+(df_silver.write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .partitionBy(PARTITION_COL)
+    .saveAsTable(f"{SILVER_CATALOG}.{SILVER_SCHEMA}.{SILVER_TABLE}"))
+
+good = df_silver.filter(col("_quality_flag") == "OK").count()
+bad  = df_silver.filter(col("_quality_flag") != "OK").count()
+print(f"✅ Silver complete. Good rows: {good} | Flagged rows: {bad}")
+```
+
+---
+
+### 🥇 Gold – Curation & Analytics-Ready Output
+
+```python
+# ============================================================
+# GOLD LAYER – Curated, Analytics-Ready Dataset
+# Purpose: Aggregate and shape Silver data into trusted,
+#          business-facing tables consumable by OAC/FDI.
+# ============================================================
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, sum as _sum, avg, count, max as _max,
+    current_timestamp
+)
+
+spark = SparkSession.builder.appName("gold_curation").getOrCreate()
+
+# --- CONFIG -------------------------------------------------
+SILVER_CATALOG  = "your_catalog"
+SILVER_SCHEMA   = "silver"
+SILVER_TABLE    = "your_table_name_clean"
+
+GOLD_CATALOG    = "your_catalog"
+GOLD_SCHEMA     = "gold"
+GOLD_TABLE      = "your_summary_table"
+
+GROUP_BY_COL    = "category"   # Adjust to your dimension column
+METRIC_COL      = "amount"     # Adjust to your measure column
+# ------------------------------------------------------------
+
+df_silver = spark.table(f"{SILVER_CATALOG}.{SILVER_SCHEMA}.{SILVER_TABLE}")
+
+# --- 1. Filter to quality-passed rows only ------------------
+df_clean = df_silver.filter(col("_quality_flag") == "OK")
+
+# --- 2. Aggregate -------------------------------------------
+df_gold = (df_clean
+    .groupBy(GROUP_BY_COL)
+    .agg(
+        count("*").alias("record_count"),
+        _sum(METRIC_COL).alias("total_amount"),
+        avg(METRIC_COL).alias("avg_amount"),
+        _max(METRIC_COL).alias("max_amount")
+    )
+    .withColumn("_gold_timestamp", current_timestamp()))
+
+# --- 3. Write Gold (full overwrite — trusted snapshot) ------
+(df_gold.write
+    .format("delta")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(f"{GOLD_CATALOG}.{GOLD_SCHEMA}.{GOLD_TABLE}"))
+
+print(f"✅ Gold curation complete: {df_gold.count()} summary rows.")
+spark.sql(f"SELECT * FROM {GOLD_CATALOG}.{GOLD_SCHEMA}.{GOLD_TABLE}").show()
+
+# --- 4. (Optional) Register for OAC consumption -------------
+# Grant read access to OAC service principal or data share:
+# spark.sql(f"GRANT SELECT ON TABLE {GOLD_CATALOG}.{GOLD_SCHEMA}.{GOLD_TABLE} TO `oac-service-user`")
+```
+
+---
+
+### 🔁 Workflow Orchestration – Multi-Step Pipeline Scaffold
+
+```python
+# ============================================================
+# WORKFLOW ORCHESTRATION SCAFFOLD
+# Purpose: Template for a parameterized, multi-step AIDP
+#          workflow notebook. Designed to be called by the
+#          AIDP Workflow engine with injected job parameters.
+# ============================================================
+
+from pyspark.sql import SparkSession
+import sys, traceback
+from datetime import datetime
+
+spark = SparkSession.builder.appName("aidp_pipeline").getOrCreate()
+
+# --- JOB PARAMETERS (injected by AIDP Workflow engine) ------
+# Access via dbutils or notebook widgets depending on config.
+# Replace defaults with your Workflow parameter names.
+try:
+    RUN_DATE   = dbutils.widgets.get("run_date")    # e.g. "2026-03-11"
+    ENV        = dbutils.widgets.get("env")         # e.g. "dev" | "prod"
+    TABLE_NAME = dbutils.widgets.get("table_name")
+except:
+    # Fallback defaults for local/interactive testing
+    RUN_DATE   = str(datetime.today().date())
+    ENV        = "dev"
+    TABLE_NAME = "your_table"
+
+print(f"▶ Pipeline started | run_date={RUN_DATE} | env={ENV} | table={TABLE_NAME}")
+
+# --- STEP RUNNER UTILITY ------------------------------------
+def run_step(name, fn):
+    print(f"\n{'='*50}\n⚙️  STEP: {name}\n{'='*50}")
+    try:
+        fn()
+        print(f"✅ {name} — SUCCESS")
+    except Exception as e:
+        print(f"❌ {name} — FAILED\n{traceback.format_exc()}")
+        sys.exit(1)   # Halt workflow on failure
+
+# --- STEP DEFINITIONS ---------------------------------------
+def step_ingest():
+    # Replace with Bronze ingestion logic or %run call
+    # %run ./bronze_ingestion
+    print(f"  Ingesting raw data for {RUN_DATE}...")
+
+def step_transform():
+    # Replace with Silver transformation logic or %run call
+    # %run ./silver_transform
+    print(f"  Transforming data for table: {TABLE_NAME}...")
+
+def step_curate():
+    # Replace with Gold curation logic or %run call
+    # %run ./gold_curation
+    print(f"  Curating Gold layer for env: {ENV}...")
+
+def step_validate():
+    # Add post-pipeline data quality assertions
+    # e.g. assert row counts, null checks, schema checks
+    df = spark.table(f"your_catalog.gold.{TABLE_NAME}")
+    assert df.count() > 0, f"Gold table {TABLE_NAME} is empty!"
+    print(f"  Validation passed. Row count: {df.count()}")
+
+def step_notify():
+    # Optional: call OCI Notifications, webhook, or log to audit table
+    print(f"  Pipeline complete. Notifying downstream consumers...")
+
+# --- PIPELINE EXECUTION -------------------------------------
+run_step("1. Bronze Ingestion",       step_ingest)
+run_step("2. Silver Transformation",  step_transform)
+run_step("3. Gold Curation",          step_curate)
+run_step("4. Post-Pipeline Validation", step_validate)
+run_step("5. Notification",           step_notify)
+
+print(f"\n🏁 Pipeline finished successfully at {datetime.now().isoformat()}")
+```
+
+---
+
+*18 resources · 7 use case groups · 4 resource type categories · 4 notebook scaffolds*

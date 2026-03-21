@@ -25,7 +25,7 @@ import pandas as pd
 import base64
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 1: CONFIGURATION
@@ -111,11 +111,11 @@ def get_oauth_token():
 # SECTION 3: OAC API HELPERS
 # ─────────────────────────────────────────────────────────────
 
-def get_headers(token):
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type":  "application/json"
-    }
+def get_headers(token=None):
+    """Use token_mgr by default; accepts override for testing."""
+    if token:
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    return token_mgr.get_headers()
 
 
 def b64_encode_id(object_path):
@@ -129,25 +129,25 @@ def b64_encode_id(object_path):
     ).decode("utf-8").rstrip("=")
 
 
-def get_catalog_items(token, catalog_type):
+def get_catalog_items(catalog_type):
     """
     Paginate through all catalog items of a given type.
     Returns list of dicts with id, name, path, owner, created, modified.
+    Token is refreshed automatically via token_mgr on each page.
     """
     items = []
     page  = 1
     base  = f"{OAC_BASE_URL}/api/{OAC_API_VERSION}/catalog/{catalog_type}"
-    hdrs  = get_headers(token)
 
     while True:
-        params = {
-            "search": "*",
-            "limit":  PAGE_SIZE,
-            "page":   page
-        }
-        resp = requests.get(base, headers=hdrs, params=params, timeout=30)
-        
-        # 404 means no items of this type — skip gracefully
+        params = {"search": "*", "limit": PAGE_SIZE, "page": page}
+        resp = requests.get(
+            base,
+            headers=get_headers(),   # token_mgr auto-refreshes here
+            params=params,
+            timeout=30
+        )
+
         if resp.status_code == 404:
             print(f"  ⚠️  {catalog_type}: no items found (404)")
             break
@@ -158,9 +158,10 @@ def get_catalog_items(token, catalog_type):
             break
 
         items.extend(page_items)
-
         total_pages = int(resp.headers.get("oa-page-count", 1))
-        print(f"  📄 {catalog_type}: page {page}/{total_pages} — {len(page_items)} items")
+        print(f"  📄 {catalog_type}: page {page}/{total_pages} "
+              f"— {len(page_items)} items "
+              f"[token: {token_mgr.seconds_remaining}s remaining]")
 
         if page >= total_pages:
             break
@@ -171,20 +172,20 @@ def get_catalog_items(token, catalog_type):
     return items
 
 
-def get_acl_for_item(token, catalog_type, item_id):
+def get_acl_for_item(catalog_type, item_id):
     """
     Call the getACL endpoint for a single catalog item.
     item_id should already be base64url-encoded.
-    Returns list of ACL entries or empty list on error.
+    Token is refreshed automatically via token_mgr.
     """
     url  = f"{OAC_BASE_URL}/api/{OAC_API_VERSION}/catalog/{catalog_type}/{item_id}/actions/getACL"
-    hdrs = get_headers(token)
+    hdrs = get_headers()    # token_mgr auto-refreshes here
     hdrs["Content-Length"] = "0"
 
     resp = requests.post(url, headers=hdrs, timeout=30)
 
     if resp.status_code in (403, 404):
-        return []   # No access or item gone — skip silently
+        return []
     resp.raise_for_status()
     return resp.json()
 
@@ -193,23 +194,23 @@ def get_acl_for_item(token, catalog_type, item_id):
 # SECTION 4: EXTRACT — Fetch All Items + ACLs
 # ─────────────────────────────────────────────────────────────
 
-def extract_all_acls(token):
+def extract_all_acls():
     """
     For each catalog type, fetch all items then get their ACLs.
+    Token is managed automatically — no token passing required.
     Returns a flat list of records, one row per item+principal.
     """
-    all_records = []
-    extracted_at = datetime.utcnow().isoformat()
+    all_records  = []
+    extracted_at = datetime.now(tz=timezone.utc).isoformat()
 
     for catalog_type in CATALOG_TYPES:
         print(f"\n{'─'*50}")
         print(f"🔍 Processing: {catalog_type.upper()}")
         print(f"{'─'*50}")
 
-        items = get_catalog_items(token, catalog_type)
+        items = get_catalog_items(catalog_type)   # no token arg needed
 
         for item in items:
-            # Extract item metadata — field names vary slightly by type
             raw_id   = item.get("id") or item.get("objectId") or ""
             name     = item.get("name", "")
             path     = item.get("path", "") or item.get("objectPath", "")
@@ -218,13 +219,11 @@ def extract_all_acls(token):
             created  = item.get("created", "")
             modified = item.get("lastModified", "") or item.get("modified", "")
 
-            # Encode ID for ACL endpoint
             encoded_id = b64_encode_id(raw_id) if raw_id else ""
             if not encoded_id:
                 continue
 
-            # Get ACL entries for this item
-            acl_entries = get_acl_for_item(token, catalog_type, encoded_id)
+            acl_entries = get_acl_for_item(catalog_type, encoded_id)   # no token arg needed
             time.sleep(RATE_LIMIT_WAIT)
 
             if not acl_entries:
@@ -373,16 +372,16 @@ def load_to_adw(records):
 
 print("=" * 60)
 print("  OAC CATALOG ACL EXTRACTOR")
-print(f"  Run time: {datetime.utcnow().isoformat()} UTC")
+print(f"  Run time: {datetime.now(tz=timezone.utc).isoformat()}")
 print("=" * 60)
 
-# Step 1: Authenticate
+# Step 1: Initialise token manager (fetches first token)
 print("\n[1/3] Authenticating with OAC...")
-token = get_oauth_token()
+_ = token_mgr.token   # Triggers initial fetch and prints confirmation
 
 # Step 2: Extract all catalog ACLs
 print("\n[2/3] Extracting catalog items and ACLs...")
-records = extract_all_acls(token)
+records = extract_all_acls()   # token_mgr handles all refresh internally
 
 # Step 3: Load to ADW
 print("\n[3/3] Loading to ADW...")

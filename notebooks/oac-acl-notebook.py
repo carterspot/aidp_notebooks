@@ -1,9 +1,9 @@
 # ============================================================
-# OAC CATALOG ACL EXTRACTOR
+# OAC CATALOG ACL EXTRACTOR — BRONZE LAYER
 # Purpose: Pull ACLs for all catalog item types from Oracle
 #          Analytics Cloud via REST API and load into ADW via
-#          the AIDP catalog_manager External Catalog connection.
-# Target:  catalog_manager.catalog_manager.OAC_CATALOG_ACL
+#          the AIDP arganoadw_oacuser_sh External Catalog.
+# Target:  arganoadw_oacuser_sh.oacuser.OAC_CATALOG_ACL
 # Auth:    tokens.json downloaded from OAC Profile
 #          (no client_secret or password required)
 #
@@ -13,8 +13,9 @@
 #      (If Access Tokens tab not visible: Profile → Advanced
 #       → Enable Developer Options → Save)
 #   2. Calling user must have OAC BI Service Administrator role
-#   3. catalog_manager External Catalog registered in AIDP
-#   4. Spark cluster attached to this notebook
+#   3. arganoadw_oacuser_sh External Catalog registered in AIDP
+#   4. oacuser schema already exists in ADW (do not create it)
+#   5. Spark cluster attached to this notebook
 # ============================================================
 
 
@@ -49,6 +50,10 @@ IDCS_DOMAIN_URL = "https://idcs-55a83f44a5c945af86ee0605a1856068.identity.oracle
 CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"   # OAC built-in IDCS app
 
 # ── Target Table (AIDP External Catalog → ADW) ───────────────
+# NOTE: arganoadw_oacuser_sh is an External ADW Catalog.
+#       The oacuser schema must already exist in ADW.
+#       Do NOT attempt CREATE SCHEMA against an External Catalog.
+#       Do NOT use Delta format — ADW does not support Delta tables.
 AIDP_CATALOG    = "arganoadw_oacuser_sh"
 AIDP_SCHEMA     = "oacuser"
 AIDP_TABLE      = "OAC_CATALOG_ACL"
@@ -134,7 +139,6 @@ class OACTokenManager:
             print(f"  Expires at     : {expiry_str}")
             print(f"  Time remaining : {remaining}s")
         except Exception:
-            # If JWT decode fails assume valid and let refresh handle it
             self._expires_at = time.time() + 3600
             print("  Token expiry   : unknown (will refresh proactively)")
 
@@ -145,13 +149,12 @@ class OACTokenManager:
         the raw client GUID only.
         """
         token_url     = f"{IDCS_DOMAIN_URL}/oauth2/v1/token"
-        client_id_raw = CLIENT_ID.replace("_APPID", "")   # ← strip suffix
+        client_id_raw = CLIENT_ID.replace("_APPID", "")   # strip suffix for token endpoint
 
         payload = {
             "grant_type":    "refresh_token",
             "refresh_token": self._refresh_token,
             "client_id":     client_id_raw,
-            # scope is optional for refresh_token grant per IDCS docs
         }
         resp = requests.post(
             token_url,
@@ -164,7 +167,7 @@ class OACTokenManager:
         if resp.status_code == 401:
             raise RuntimeError(
                 "❌ Refresh token rejected (401 Unauthorized).\n"
-                "   Your tokens.json has likely expired (refresh tokens expire in ~24–48h).\n"
+                "   Your tokens.json has likely expired (refresh tokens expire ~24-48h).\n"
                 "   Fix: OAC → Profile → Access Tokens → Download tokens\n"
                 "        Re-upload tokens.json to /Workspace/Shared/ and re-run."
             )
@@ -172,7 +175,6 @@ class OACTokenManager:
         data = resp.json()
 
         self._access_token = data["access_token"]
-        # Refresh token may rotate — update if IDCS returns a new one
         if "refresh_token" in data:
             self._refresh_token = data["refresh_token"]
 
@@ -371,7 +373,7 @@ def extract_all_acls():
 
 
 print("=" * 50)
-print("  SECTION 4 COMPLETE: Extract Function Loaded")
+print("  SECTION 4 READY: Extract Function Loaded")
 print("=" * 50)
 
 
@@ -381,17 +383,21 @@ print("=" * 50)
 
 def load_to_adw(records):
     """
-    Writes ACL records to catalog_manager.catalog_manager.OAC_CATALOG_ACL
+    Writes ACL records to arganoadw_oacuser_sh.oacuser.OAC_CATALOG_ACL
     via the AIDP External Catalog Spark connection.
-    No wallet or cx_Oracle required — uses saveAsTable() directly.
-    Full overwrite every run — clean snapshot each execution.
+
+    KEY RULES for External ADW Catalogs:
+      - DO NOT use CREATE SCHEMA — schema must pre-exist in ADW
+      - DO NOT use .format("delta") — ADW does not support Delta tables
+      - Use saveAsTable() with 3-part name — Spark handles the JDBC write
+      - mode("overwrite") truncates and reloads on every run
     """
     from pyspark.sql import SparkSession
     from pyspark.sql.types import (
         StructType, StructField, StringType, IntegerType
     )
 
-    spark = SparkSession.builder.appName("oac_acl_load").getOrCreate()
+    spark = SparkSession.builder.appName("oac_acl_bronze").getOrCreate()
 
     schema = StructType([
         StructField("CATALOG_TYPE",     StringType(),  True),
@@ -415,12 +421,8 @@ def load_to_adw(records):
 
     df = spark.createDataFrame(records, schema=schema)
 
-    # Ensure schema exists in the external catalog
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {AIDP_CATALOG}.{AIDP_SCHEMA}")
-
-    # Full overwrite — clean snapshot each run
+    # Write via External Catalog connection — no Delta, no CREATE SCHEMA
     (df.write
-        .format("delta")
         .mode("overwrite")
         .option("overwriteSchema", "true")
         .saveAsTable(FULL_TABLE_NAME))
@@ -435,7 +437,7 @@ def load_to_adw(records):
 
 
 print("=" * 50)
-print("  SECTION 5 COMPLETE: Load Function Loaded")
+print("  SECTION 5 READY: Load Function Loaded")
 print("=" * 50)
 
 
@@ -444,7 +446,7 @@ print("=" * 50)
 # ─────────────────────────────────────────────────────────────
 
 print("=" * 60)
-print("  OAC CATALOG ACL EXTRACTOR — PIPELINE START")
+print("  OAC CATALOG ACL EXTRACTOR — BRONZE LAYER")
 print(f"  Run time: {datetime.now(tz=timezone.utc).isoformat()}")
 print("=" * 60)
 
@@ -470,5 +472,5 @@ else:
     print("    Check: token is valid, user has BI Service Administrator role.")
 
 print("\n" + "=" * 60)
-print("  🏁 PIPELINE COMPLETE")
+print("  🏁 BRONZE PIPELINE COMPLETE")
 print("=" * 60)

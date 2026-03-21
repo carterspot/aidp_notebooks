@@ -144,46 +144,56 @@ class OACTokenManager:
 
     def _refresh(self):
         """
-        Use refresh_token grant to get a new access_token from IDCS.
-        Strips _APPID suffix from CLIENT_ID — token endpoint expects
-        the raw client GUID only.
-        """
-        token_url     = f"{IDCS_DOMAIN_URL}/oauth2/v1/token"
-        client_id_raw = CLIENT_ID.replace("_APPID", "")   # strip suffix for token endpoint
+        Refresh the access token using OAC's own token refresh endpoint.
+        This is NOT the IDCS /oauth2/v1/token endpoint.
 
-        payload = {
-            "grant_type":    "refresh_token",
-            "refresh_token": self._refresh_token,
-            "client_id":     client_id_raw,
-        }
+        OAC refresh flow (from tokens.json download instructions):
+          POST /api/dv/api/v1/tokens/token/refresh
+          Authorization: Bearer <current_access_token>
+          Content-Type: text/plain
+          Body: <refresh_token> (plain text)
+        """
+        refresh_url = f"{OAC_BASE_URL}/api/dv/api/v1/tokens/token/refresh"
+
         resp = requests.post(
-            token_url,
-            data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            refresh_url,
+            data=self._refresh_token,          # plain text body
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Content-Type":  "text/plain"
+            },
             timeout=30
         )
 
-        # Catch 401 and surface a clear fix instead of a raw HTTPError
         if resp.status_code == 401:
             raise RuntimeError(
                 "❌ Refresh token rejected (401 Unauthorized).\n"
-                "   Your tokens.json has likely expired (refresh tokens expire ~24-48h).\n"
+                "   Your tokens.json has likely expired (refresh tokens expire ~3600s).\n"
                 "   Fix: OAC → Profile → Access Tokens → Download tokens\n"
                 "        Re-upload tokens.json to /Workspace/Shared/ and re-run."
             )
         resp.raise_for_status()
         data = resp.json()
 
-        self._access_token = data["access_token"]
-        if "refresh_token" in data:
+        # OAC returns camelCase keys
+        self._access_token  = data.get("accessToken")  or data.get("access_token")
+        if not self._access_token:
+            raise ValueError(f"❌ Refresh response missing accessToken. Response: {data}")
+
+        # Update refresh token if a new one is returned
+        if "refreshToken" in data:
+            self._refresh_token = data["refreshToken"]
+        elif "refresh_token" in data:
             self._refresh_token = data["refresh_token"]
 
-        expires_in       = int(data.get("expires_in", 3600))
+        # OAC refresh response may not include expires_in — default to 3600
+        expires_in       = int(data.get("expiresIn") or data.get("expires_in") or 3600)
         self._expires_at = time.time() + expires_in
         expiry_str = datetime.fromtimestamp(
             self._expires_at, tz=timezone.utc
         ).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"🔑 Token refreshed. Valid for {expires_in}s → expires at {expiry_str}")
+        print(f"🔑 Token refreshed via OAC endpoint. "
+              f"Valid for {expires_in}s → expires at {expiry_str}")
 
     @property
     def token(self):

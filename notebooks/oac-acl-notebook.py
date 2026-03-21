@@ -49,8 +49,8 @@ IDCS_DOMAIN_URL = "https://idcs-55a83f44a5c945af86ee0605a1856068.identity.oracle
 CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"   # OAC built-in IDCS app
 
 # ── Target Table (AIDP External Catalog → ADW) ───────────────
-AIDP_CATALOG    = "catalog_manager"
-AIDP_SCHEMA     = "catalog_manager"
+AIDP_CATALOG    = "arganoadw_oacuser_sh"
+AIDP_SCHEMA     = "oacuser"
 AIDP_TABLE      = "OAC_CATALOG_ACL"
 FULL_TABLE_NAME = f"{AIDP_CATALOG}.{AIDP_SCHEMA}.{AIDP_TABLE}"
 

@@ -20,10 +20,8 @@
 # ============================================================
 
 import requests
-import cx_Oracle
 import pandas as pd
 import base64
-import json
 import time
 from datetime import datetime, timezone
 
@@ -48,13 +46,13 @@ OAC_USERNAME    = "carter.beaton@argano.com"             # native IDCS user conf
 OAC_PASSWORD    = "<your-oac-password>"
 OAC_SCOPE       = "urn:opc:resource:consumer::all"       # confirmed from JWT
 
-# -- ADW Connection ------------------------------------------
-# Wallet must be unzipped to WALLET_DIR on the cluster
-WALLET_DIR      = "/path/to/wallet"                      # e.g. /home/opc/wallet/adw_wallet
-ADW_DSN         = "<your-adw-service-name>"              # e.g. adwprod_high (from tnsnames.ora in wallet)
-ADW_USER        = "<adw-schema-username>"
-ADW_PASSWORD    = "<adw-schema-password>"
-ADW_TABLE       = "OAC_CATALOG_ACL"
+# -- Target Table (AIDP External Catalog → ADW) --------------
+# Uses the catalog_manager External Catalog already registered
+# in the AIDP Master Catalog. No wallet or cx_Oracle needed.
+AIDP_CATALOG    = "catalog_manager"
+AIDP_SCHEMA     = "catalog_manager"
+AIDP_TABLE      = "OAC_CATALOG_ACL"
+FULL_TABLE_NAME = f"{AIDP_CATALOG}.{AIDP_SCHEMA}.{AIDP_TABLE}"
 
 # -- Catalog Types to Extract --------------------------------
 CATALOG_TYPES = [
@@ -279,91 +277,60 @@ def extract_all_acls():
 # SECTION 5: LOAD — Write to ADW via cx_Oracle
 # ─────────────────────────────────────────────────────────────
 
-DDL_CREATE_TABLE = f"""
-CREATE TABLE {ADW_TABLE} (
-    CATALOG_TYPE      VARCHAR2(50),
-    ITEM_ID           VARCHAR2(1000),
-    ITEM_NAME         VARCHAR2(500),
-    ITEM_PATH         VARCHAR2(2000),
-    ITEM_OWNER        VARCHAR2(255),
-    ITEM_CREATED      VARCHAR2(50),
-    ITEM_MODIFIED     VARCHAR2(50),
-    ACCOUNT_GUID      VARCHAR2(255),
-    ACCOUNT_TYPE      VARCHAR2(50),
-    ACCOUNT_NAME      VARCHAR2(255),
-    PERM_READ         NUMBER(1),
-    PERM_WRITE        NUMBER(1),
-    PERM_LIST         NUMBER(1),
-    PERM_DELETE       NUMBER(1),
-    PERM_CHANGE_PERM  NUMBER(1),
-    PERM_TAKE_OWN     NUMBER(1),
-    EXTRACTED_AT      VARCHAR2(50)
-)
-"""
-
-DML_INSERT = f"""
-INSERT INTO {ADW_TABLE} (
-    CATALOG_TYPE, ITEM_ID, ITEM_NAME, ITEM_PATH,
-    ITEM_OWNER, ITEM_CREATED, ITEM_MODIFIED,
-    ACCOUNT_GUID, ACCOUNT_TYPE, ACCOUNT_NAME,
-    PERM_READ, PERM_WRITE, PERM_LIST, PERM_DELETE,
-    PERM_CHANGE_PERM, PERM_TAKE_OWN, EXTRACTED_AT
-) VALUES (
-    :CATALOG_TYPE, :ITEM_ID, :ITEM_NAME, :ITEM_PATH,
-    :ITEM_OWNER, :ITEM_CREATED, :ITEM_MODIFIED,
-    :ACCOUNT_GUID, :ACCOUNT_TYPE, :ACCOUNT_NAME,
-    :PERM_READ, :PERM_WRITE, :PERM_LIST, :PERM_DELETE,
-    :PERM_CHANGE_PERM, :PERM_TAKE_OWN, :EXTRACTED_AT
-)
-"""
-
+# ─────────────────────────────────────────────────────────────
+# SECTION 5: LOAD — Write to ADW via AIDP External Catalog
+# ─────────────────────────────────────────────────────────────
 
 def load_to_adw(records):
     """
-    Truncate and reload ADW table with fresh ACL snapshot.
-    Creates table on first run. Uses executemany for performance.
+    Write ACL records to catalog_manager.catalog_manager.OAC_CATALOG_ACL
+    via the AIDP External Catalog connection (no wallet/cx_Oracle needed).
+    Full overwrite on each run — clean snapshot every execution.
     """
-    cx_Oracle.init_oracle_client()  # Use instant client or wallet path
-    
-    # Point cx_Oracle to wallet directory
-    conn = cx_Oracle.connect(
-        user=ADW_USER,
-        password=ADW_PASSWORD,
-        dsn=ADW_DSN,
-        config_dir=WALLET_DIR,
-        wallet_location=WALLET_DIR,
-        wallet_password=None  # Set if wallet is password-protected
+    from pyspark.sql import SparkSession
+    from pyspark.sql.types import (
+        StructType, StructField,
+        StringType, IntegerType
     )
-    cursor = conn.cursor()
 
-    # Create table if it doesn't exist
-    try:
-        cursor.execute(DDL_CREATE_TABLE)
-        conn.commit()
-        print(f"✅ Table {ADW_TABLE} created.")
-    except cx_Oracle.DatabaseError as e:
-        err, = e.args
-        if "ORA-00955" in str(err):  # Table already exists
-            print(f"ℹ️  Table {ADW_TABLE} already exists — truncating.")
-        else:
-            raise
+    spark = SparkSession.builder.appName("oac_acl_load").getOrCreate()
 
-    # Truncate for full refresh (change to merge logic if incremental needed)
-    cursor.execute(f"TRUNCATE TABLE {ADW_TABLE}")
-    conn.commit()
+    schema = StructType([
+        StructField("CATALOG_TYPE",     StringType(),  True),
+        StructField("ITEM_ID",          StringType(),  True),
+        StructField("ITEM_NAME",        StringType(),  True),
+        StructField("ITEM_PATH",        StringType(),  True),
+        StructField("ITEM_OWNER",       StringType(),  True),
+        StructField("ITEM_CREATED",     StringType(),  True),
+        StructField("ITEM_MODIFIED",    StringType(),  True),
+        StructField("ACCOUNT_GUID",     StringType(),  True),
+        StructField("ACCOUNT_TYPE",     StringType(),  True),
+        StructField("ACCOUNT_NAME",     StringType(),  True),
+        StructField("PERM_READ",        IntegerType(), True),
+        StructField("PERM_WRITE",       IntegerType(), True),
+        StructField("PERM_LIST",        IntegerType(), True),
+        StructField("PERM_DELETE",      IntegerType(), True),
+        StructField("PERM_CHANGE_PERM", IntegerType(), True),
+        StructField("PERM_TAKE_OWN",    IntegerType(), True),
+        StructField("EXTRACTED_AT",     StringType(),  True),
+    ])
 
-    # Batch insert
-    batch_size = 500
-    total = len(records)
-    for i in range(0, total, batch_size):
-        batch = records[i:i + batch_size]
-        cursor.executemany(DML_INSERT, batch)
-        conn.commit()
-        print(f"  ↳ Inserted rows {i+1}–{min(i+batch_size, total)} of {total}")
+    df = spark.createDataFrame(records, schema=schema)
 
-    cursor.close()
-    conn.close()
-    print(f"\n✅ Load complete. {total} rows in {ADW_TABLE}.")
+    # Ensure schema exists in the external catalog
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {AIDP_CATALOG}.{AIDP_SCHEMA}")
+
+    # Overwrite table — full refresh each run
+    (df.write
+        .format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(FULL_TABLE_NAME))
+
+    count = spark.table(FULL_TABLE_NAME).count()
+    print(f"\n✅ Load complete → {FULL_TABLE_NAME}")
+    print(f"   Rows written: {count:,}")
+    print(f"   Table is now queryable in AIDP Master Catalog and OAC.")
 
 
 # ─────────────────────────────────────────────────────────────

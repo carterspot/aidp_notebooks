@@ -17,6 +17,7 @@
 #   4. Spark cluster attached to this notebook
 # ============================================================
 
+
 # ─────────────────────────────────────────────────────────────
 # SECTION 1: IMPORTS & CONFIGURATION
 # ─────────────────────────────────────────────────────────────
@@ -37,15 +38,15 @@ OAC_API_VERSION = "20210901"
 #   → Profile → Access Tokens → Download tokens
 #   Upload tokens.json to your AIDP workspace and set path below.
 #
-# To enable the Access Tokens tab if not visible:
+# If the Access Tokens tab is not visible:
 #   Profile → Advanced tab → Enable Developer Options → Save
 #
-# Tokens expire — refresh from OAC Profile when needed.
+# Tokens expire — re-download from OAC Profile when needed.
 # The refresh token is used automatically to get a new
 # access token without returning to the browser.
-TOKENS_FILE     = "/Workspace/Shared/tokens.json"   # ← update path if needed
+TOKENS_FILE     = "/Workspace/Shared/tokens.json"    # ← update if stored elsewhere
 IDCS_DOMAIN_URL = "https://idcs-55a83f44a5c945af86ee0605a1856068.identity.oraclecloud.com"
-CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"  # OAC built-in IDCS app
+CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"   # OAC built-in IDCS app
 
 # ── Target Table (AIDP External Catalog → ADW) ───────────────
 AIDP_CATALOG    = "catalog_manager"
@@ -65,9 +66,14 @@ CATALOG_TYPES = [
 # ── Pagination & Rate Limiting ────────────────────────────────
 PAGE_SIZE            = 100   # Max items per API page
 RATE_LIMIT_WAIT      = 0.2   # Seconds between API calls
-TOKEN_REFRESH_BUFFER = 300   # Refresh token 5 min before expiry
+TOKEN_REFRESH_BUFFER = 300   # Proactively refresh 5 min before expiry
 
-print("✅ Configuration loaded.")
+print("=" * 50)
+print("  SECTION 1 COMPLETE: Imports & Configuration")
+print(f"  OAC  : {OAC_BASE_URL}")
+print(f"  Table: {FULL_TABLE_NAME}")
+print(f"  Types: {CATALOG_TYPES}")
+print("=" * 50)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -80,10 +86,10 @@ class OACTokenManager:
     downloaded from OAC Profile → Access Tokens → Download tokens.
 
     - Loads access_token and refresh_token from tokens.json on init
-    - Uses access_token directly for all API calls
-    - Automatically uses refresh_token to get a new access_token
-      when within TOKEN_REFRESH_BUFFER seconds of expiry
+    - Decodes JWT exp claim to track expiry precisely
+    - Auto-refreshes via refresh_token grant before expiry
     - No client_secret, username, or password required
+    - Strips _APPID suffix from CLIENT_ID for token endpoint calls
     """
 
     def __init__(self, tokens_file):
@@ -93,47 +99,59 @@ class OACTokenManager:
         self._load_tokens(tokens_file)
 
     def _load_tokens(self, tokens_file):
-        """Load initial tokens from tokens.json."""
-        import json
+        """Load initial tokens from tokens.json and decode expiry."""
+        import json, json as _json
         with open(tokens_file, "r") as f:
             data = json.load(f)
 
-        self._access_token  = data.get("access_token") or data.get("accessToken")
+        # Support both camelCase and snake_case key formats
+        self._access_token  = data.get("access_token")  or data.get("accessToken")
         self._refresh_token = data.get("refresh_token") or data.get("refreshToken")
 
         if not self._access_token:
-            raise ValueError("tokens.json must contain 'access_token'")
+            raise ValueError(
+                "❌ tokens.json must contain 'access_token'.\n"
+                "   Re-download from OAC → Profile → Access Tokens → Download tokens."
+            )
         if not self._refresh_token:
             raise ValueError(
-                "tokens.json must contain 'refresh_token' — "
-                "ensure offline_access scope was included when downloading"
+                "❌ tokens.json must contain 'refresh_token'.\n"
+                "   Ensure the token was downloaded (not just copied) from OAC Profile."
             )
 
-        # Decode expiry from JWT payload (no verification — just reading exp claim)
-        import json as _json
+        # Decode JWT payload to read exp claim (no signature verification needed)
         try:
             payload = self._access_token.split(".")[1]
-            payload += "=" * (4 - len(payload) % 4)   # pad base64
+            payload += "=" * (4 - len(payload) % 4)    # pad to valid base64 length
             claims = _json.loads(base64.urlsafe_b64decode(payload))
             self._expires_at = claims.get("exp", 0)
             expiry_str = datetime.fromtimestamp(
                 self._expires_at, tz=timezone.utc
             ).strftime("%Y-%m-%d %H:%M:%S UTC")
-            print(f"✅ tokens.json loaded.")
-            print(f"   Access token expires at : {expiry_str}")
-            print(f"   Time remaining          : {self.seconds_remaining}s")
+            remaining = self.seconds_remaining
+            status = "✅ Valid" if remaining > TOKEN_REFRESH_BUFFER else "⚠️  Expired or expiring soon"
+            print(f"  Token status   : {status}")
+            print(f"  Expires at     : {expiry_str}")
+            print(f"  Time remaining : {remaining}s")
         except Exception:
+            # If JWT decode fails assume valid and let refresh handle it
             self._expires_at = time.time() + 3600
-            print("✅ tokens.json loaded (expiry unknown — will refresh proactively).")
+            print("  Token expiry   : unknown (will refresh proactively)")
 
     def _refresh(self):
-        """Use refresh_token grant to obtain a new access_token from IDCS."""
-        token_url = f"{IDCS_DOMAIN_URL}/oauth2/v1/token"
+        """
+        Use refresh_token grant to get a new access_token from IDCS.
+        Strips _APPID suffix from CLIENT_ID — token endpoint expects
+        the raw client GUID only.
+        """
+        token_url     = f"{IDCS_DOMAIN_URL}/oauth2/v1/token"
+        client_id_raw = CLIENT_ID.replace("_APPID", "")   # ← strip suffix
+
         payload = {
             "grant_type":    "refresh_token",
             "refresh_token": self._refresh_token,
-            "client_id":     CLIENT_ID,
-            "scope":         "urn:opc:resource:consumer::all"
+            "client_id":     client_id_raw,
+            # scope is optional for refresh_token grant per IDCS docs
         }
         resp = requests.post(
             token_url,
@@ -141,11 +159,20 @@ class OACTokenManager:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30
         )
+
+        # Catch 401 and surface a clear fix instead of a raw HTTPError
+        if resp.status_code == 401:
+            raise RuntimeError(
+                "❌ Refresh token rejected (401 Unauthorized).\n"
+                "   Your tokens.json has likely expired (refresh tokens expire in ~24–48h).\n"
+                "   Fix: OAC → Profile → Access Tokens → Download tokens\n"
+                "        Re-upload tokens.json to /Workspace/Shared/ and re-run."
+            )
         resp.raise_for_status()
         data = resp.json()
 
         self._access_token = data["access_token"]
-        # Refresh token may rotate — update if a new one is returned
+        # Refresh token may rotate — update if IDCS returns a new one
         if "refresh_token" in data:
             self._refresh_token = data["refresh_token"]
 
@@ -154,8 +181,7 @@ class OACTokenManager:
         expiry_str = datetime.fromtimestamp(
             self._expires_at, tz=timezone.utc
         ).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"🔑 Token refreshed via refresh_token grant. "
-              f"Valid for {expires_in}s → expires at {expiry_str}")
+        print(f"🔑 Token refreshed. Valid for {expires_in}s → expires at {expiry_str}")
 
     @property
     def token(self):
@@ -177,8 +203,12 @@ class OACTokenManager:
         return max(0, int(self._expires_at - time.time()))
 
 
-# Instantiate — loads tokens.json and validates on startup
+# Instantiate — loads and validates tokens.json immediately
+print("Loading tokens.json...")
 token_mgr = OACTokenManager(TOKENS_FILE)
+print("=" * 50)
+print("  SECTION 2 COMPLETE: Token Manager Ready")
+print("=" * 50)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -186,7 +216,7 @@ token_mgr = OACTokenManager(TOKENS_FILE)
 # ─────────────────────────────────────────────────────────────
 
 def get_headers(token=None):
-    """Use token_mgr by default; accepts override for testing."""
+    """Use token_mgr by default; accepts manual override for testing."""
     if token:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     return token_mgr.get_headers()
@@ -194,8 +224,8 @@ def get_headers(token=None):
 
 def b64_encode_id(object_path):
     """
-    Base64URL-safe encode the catalog object path/ID.
-    Required by the OAC getACL endpoint.
+    Base64URL-safe encode a catalog object path/ID.
+    Required format for the OAC getACL endpoint.
     """
     return base64.urlsafe_b64encode(
         object_path.encode("utf-8")
@@ -205,7 +235,8 @@ def b64_encode_id(object_path):
 def get_catalog_items(catalog_type):
     """
     Paginate through all catalog items of a given type.
-    Token is refreshed automatically via token_mgr on each page.
+    Reads oa-page-count response header to loop all pages.
+    Token auto-refreshes via token_mgr on every request.
     """
     items = []
     page  = 1
@@ -213,14 +244,10 @@ def get_catalog_items(catalog_type):
 
     while True:
         params = {"search": "*", "limit": PAGE_SIZE, "page": page}
-        resp = requests.get(
-            base,
-            headers=get_headers(),
-            params=params,
-            timeout=30
-        )
+        resp   = requests.get(base, headers=get_headers(), params=params, timeout=30)
+
         if resp.status_code == 404:
-            print(f"  ⚠️  {catalog_type}: no items found (404)")
+            print(f"  ⚠️  {catalog_type}: no items found (404) — skipping")
             break
         resp.raise_for_status()
 
@@ -245,9 +272,9 @@ def get_catalog_items(catalog_type):
 
 def get_acl_for_item(catalog_type, item_id):
     """
-    Call getACL for a single catalog item.
-    item_id must be base64url-encoded.
-    Token refreshed automatically via token_mgr.
+    POST to getACL endpoint for a single catalog item.
+    item_id must already be base64url-encoded.
+    Returns list of ACL entries or empty list on 403/404.
     """
     url  = f"{OAC_BASE_URL}/api/{OAC_API_VERSION}/catalog/{catalog_type}/{item_id}/actions/getACL"
     hdrs = get_headers()
@@ -258,7 +285,12 @@ def get_acl_for_item(catalog_type, item_id):
     resp.raise_for_status()
     return resp.json()
 
-print("✅ API helpers loaded.")
+
+print("=" * 50)
+print("  SECTION 3 COMPLETE: API Helpers Loaded")
+print(f"  Functions: get_headers, b64_encode_id,")
+print(f"             get_catalog_items, get_acl_for_item")
+print("=" * 50)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -267,16 +299,17 @@ print("✅ API helpers loaded.")
 
 def extract_all_acls():
     """
-    For each catalog type, fetch all items then get their ACLs.
-    Returns a flat list of records — one row per item+principal.
+    For each catalog type, fetches all items then calls getACL
+    per item. Returns a flat list — one row per item+principal.
+    Items with no ACL entries are recorded with NULL permission fields.
     """
     all_records  = []
     extracted_at = datetime.now(tz=timezone.utc).isoformat()
 
     for catalog_type in CATALOG_TYPES:
-        print(f"\n{'─'*50}")
+        print(f"\n{'─' * 50}")
         print(f"🔍 Processing: {catalog_type.upper()}")
-        print(f"{'─'*50}")
+        print(f"{'─' * 50}")
 
         items = get_catalog_items(catalog_type)
 
@@ -297,14 +330,14 @@ def extract_all_acls():
             time.sleep(RATE_LIMIT_WAIT)
 
             base_row = {
-                "CATALOG_TYPE": catalog_type,
-                "ITEM_ID":      raw_id,
-                "ITEM_NAME":    name,
-                "ITEM_PATH":    path,
-                "ITEM_OWNER":   owner_nm,
-                "ITEM_CREATED": created,
-                "ITEM_MODIFIED":modified,
-                "EXTRACTED_AT": extracted_at
+                "CATALOG_TYPE":  catalog_type,
+                "ITEM_ID":       raw_id,
+                "ITEM_NAME":     name,
+                "ITEM_PATH":     path,
+                "ITEM_OWNER":    owner_nm,
+                "ITEM_CREATED":  created,
+                "ITEM_MODIFIED": modified,
+                "EXTRACTED_AT":  extracted_at
             }
 
             if not acl_entries:
@@ -330,10 +363,16 @@ def extract_all_acls():
                         "PERM_TAKE_OWN":    int(perms.get("takeOwnership",    False))
                     })
 
-    print(f"\n✅ Extraction complete. Total records: {len(all_records):,}")
+    print("=" * 50)
+    print("  SECTION 4 COMPLETE: Extraction Done")
+    print(f"  Total records: {len(all_records):,}")
+    print("=" * 50)
     return all_records
 
-print("✅ Extract function loaded.")
+
+print("=" * 50)
+print("  SECTION 4 COMPLETE: Extract Function Loaded")
+print("=" * 50)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -342,9 +381,10 @@ print("✅ Extract function loaded.")
 
 def load_to_adw(records):
     """
-    Write ACL records to catalog_manager.catalog_manager.OAC_CATALOG_ACL
-    via the AIDP External Catalog connection (no wallet/cx_Oracle needed).
-    Full overwrite on each run — clean snapshot every execution.
+    Writes ACL records to catalog_manager.catalog_manager.OAC_CATALOG_ACL
+    via the AIDP External Catalog Spark connection.
+    No wallet or cx_Oracle required — uses saveAsTable() directly.
+    Full overwrite every run — clean snapshot each execution.
     """
     from pyspark.sql import SparkSession
     from pyspark.sql.types import (
@@ -386,11 +426,17 @@ def load_to_adw(records):
         .saveAsTable(FULL_TABLE_NAME))
 
     count = spark.table(FULL_TABLE_NAME).count()
-    print(f"\n✅ Load complete → {FULL_TABLE_NAME}")
-    print(f"   Rows written : {count:,}")
-    print(f"   Queryable in AIDP Master Catalog and OAC.")
+    print("=" * 50)
+    print("  SECTION 5 COMPLETE: Load Done")
+    print(f"  Table : {FULL_TABLE_NAME}")
+    print(f"  Rows  : {count:,}")
+    print("  Status: Queryable in AIDP Master Catalog + OAC")
+    print("=" * 50)
 
-print("✅ Load function loaded.")
+
+print("=" * 50)
+print("  SECTION 5 COMPLETE: Load Function Loaded")
+print("=" * 50)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -398,19 +444,20 @@ print("✅ Load function loaded.")
 # ─────────────────────────────────────────────────────────────
 
 print("=" * 60)
-print("  OAC CATALOG ACL EXTRACTOR")
+print("  OAC CATALOG ACL EXTRACTOR — PIPELINE START")
 print(f"  Run time: {datetime.now(tz=timezone.utc).isoformat()}")
 print("=" * 60)
 
-# Step 1: Validate token on startup
+# Step 1: Validate token
 print("\n[1/3] Authenticating with OAC...")
 _ = token_mgr.token
+print(f"  ✅ Token valid. {token_mgr.seconds_remaining}s remaining.")
 
-# Step 2: Extract all catalog ACLs
+# Step 2: Extract
 print("\n[2/3] Extracting catalog items and ACLs...")
 records = extract_all_acls()
 
-# Step 3: Load to ADW
+# Step 3: Load
 print("\n[3/3] Loading to ADW...")
 if records:
     df_preview = pd.DataFrame(records)
@@ -419,6 +466,9 @@ if records:
     print(f"\nShape: {df_preview.shape}")
     load_to_adw(records)
 else:
-    print("⚠️  No records extracted. Check token validity and OAC permissions.")
+    print("⚠️  No records extracted.")
+    print("    Check: token is valid, user has BI Service Administrator role.")
 
-print("\n🏁 Pipeline complete.")
+print("\n" + "=" * 60)
+print("  🏁 PIPELINE COMPLETE")
+print("=" * 60)

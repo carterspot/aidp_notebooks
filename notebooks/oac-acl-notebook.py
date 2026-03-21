@@ -32,17 +32,21 @@ from datetime import datetime
 # ─────────────────────────────────────────────────────────────
 
 # -- OAC Connection ------------------------------------------
-OAC_BASE_URL    = "https://<your-oac-hostname>"          # e.g. https://myoac-tenancy.analytics.ocp.oraclecloud.com
+OAC_BASE_URL    = "https://argano4oracleanalytics-idsmdul6idrs-ia.analytics.ocp.oraclecloud.com"
 OAC_API_VERSION = "20210901"
 
-# -- IDCS / IAM Domain OAuth ---------------------------------
-# Get IDCS_DOMAIN_URL from: OCI Console → Identity → Domains
-# → Your Domain → Overview → Domain URL
-IDCS_DOMAIN_URL = "https://<your-idcs-domain>.identity.oraclecloud.com"
-CLIENT_ID       = "<your-confidential-app-client-id>"
-CLIENT_SECRET   = "<your-confidential-app-client-secret>"
-OAC_USERNAME    = "<your-oac-admin-username>"            # must be non-federated IDCS/IAM user
-OAC_PASSWORD    = "<your-oac-admin-password>"            # with BI Service Administrator role
+# -- IDCS OAuth (Resource Owner Password Grant) --------------
+# CLIENT_ID is the OAC instance's own built-in IDCS app ID.
+# CLIENT_SECRET: OCI Console → Identity & Security → Domains
+#   → Default → Integrated Applications
+#   → Search: "ANALYTICSINST_argano4oracleanalytics-idsmdul6idrs-ia"
+#   → Configuration tab → Client Secret → Show / Generate
+IDCS_DOMAIN_URL = "https://idcs-55a83f44a5c945af86ee0605a1856068.identity.oraclecloud.com"
+CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"
+CLIENT_SECRET   = "<get-from-idcs-app-configuration>"    # ← only missing piece
+OAC_USERNAME    = "carter.beaton@argano.com"             # native IDCS user confirmed
+OAC_PASSWORD    = "<your-oac-password>"
+OAC_SCOPE       = "urn:opc:resource:consumer::all"       # confirmed from JWT
 
 # -- ADW Connection ------------------------------------------
 # Wallet must be unzipped to WALLET_DIR on the cluster
@@ -83,13 +87,11 @@ def get_oauth_token():
     # https://<oac-hostname>/api/20210901/catalog:read
     # OR use the full instance scope from your app config.
     # Using the BI platform scope for full catalog access:
-    scope = f"{OAC_BASE_URL}/"  # trailing slash required
-
     payload = {
         "grant_type":    "password",
         "username":      OAC_USERNAME,
         "password":      OAC_PASSWORD,
-        "scope":         scope
+        "scope":         OAC_SCOPE
     }
 
     resp = requests.post(

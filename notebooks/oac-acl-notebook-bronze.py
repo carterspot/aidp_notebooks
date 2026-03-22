@@ -1,5 +1,6 @@
 # ============================================================
 # OAC CATALOG ACL EXTRACTOR — BRONZE LAYER
+# Version: 1.1 — added section comments
 # Purpose: Pull ACLs for all catalog item types from Oracle
 #          Analytics Cloud via REST API and load into ADW via
 #          the AIDP arganoadw_oacuser_sh External Catalog.
@@ -22,6 +23,41 @@
 # ─────────────────────────────────────────────────────────────
 # SECTION 1: IMPORTS & CONFIGURATION
 # ─────────────────────────────────────────────────────────────
+# All configuration is centralised here so the notebook can be
+# pointed at a different OAC instance or ADW target without
+# touching any logic in Sections 2–6.
+#
+# Key decisions documented here:
+#
+# TOKENS_FILE: tokens.json is downloaded from OAC Profile and
+#   uploaded to the AIDP workspace. It contains both an access
+#   token and a refresh token. The OACTokenManager in Section 2
+#   handles auto-refresh so long-running extracts do not fail
+#   mid-run due to token expiry.
+#
+# CLIENT_ID: This is the OAC instance's own built-in IDCS app
+#   ID decoded from the JWT. The _APPID suffix is stripped
+#   automatically by the token manager before calling the IDCS
+#   refresh endpoint — it is kept here as-is to match the
+#   original JWT value exactly.
+#
+# CATALOG_TYPES: The five types extracted cover the full set
+#   of ACL-managed assets in OAC. Additional types supported
+#   by the API (e.g. sequences, scripts, models) can be added
+#   to this list if needed in a future iteration.
+#
+# PAGE_SIZE: The OAC Catalog API paginates results. 100 is the
+#   practical maximum per page. Total pages are read from the
+#   oa-page-count response header on each call.
+#
+# RATE_LIMIT_WAIT: A 0.2s sleep between ACL calls prevents
+#   the notebook from hammering the OAC API. Increase this
+#   value if the OAC instance shows signs of throttling.
+#
+# TOKEN_REFRESH_BUFFER: Tokens are proactively refreshed 300s
+#   (5 minutes) before expiry. This ensures no API call is
+#   made with an expired token even in large catalogs.
+# ─────────────────────────────────────────────────────────────
 
 import requests
 import pandas as pd
@@ -42,18 +78,18 @@ OAC_API_VERSION = "20210901"
 # If the Access Tokens tab is not visible:
 #   Profile → Advanced tab → Enable Developer Options → Save
 #
-# Tokens expire — re-download from OAC Profile when needed.
-# The refresh token is used automatically to get a new
-# access token without returning to the browser.
-TOKENS_FILE     = "/Workspace/Shared/tokens.json"    # ← update if stored elsewhere
+# Tokens expire in ~3600s. The refresh token is used
+# automatically — re-download tokens.json only when both
+# access and refresh tokens have expired.
+TOKENS_FILE     = "/Workspace/Shared/tokens.json"
 IDCS_DOMAIN_URL = "https://idcs-55a83f44a5c945af86ee0605a1856068.identity.oraclecloud.com"
-CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"   # OAC built-in IDCS app
+CLIENT_ID       = "gkligdfeuzql4yw7pb74ka6ecx3rjsga_APPID"
 
 # ── Target Table (AIDP External Catalog → ADW) ───────────────
-# NOTE: arganoadw_oacuser_sh is an External ADW Catalog.
-#       The oacuser schema must already exist in ADW.
-#       Do NOT attempt CREATE SCHEMA against an External Catalog.
-#       Do NOT use Delta format — ADW does not support Delta tables.
+# arganoadw_oacuser_sh is an External ADW Catalog registered
+# in the AIDP Master Catalog. The oacuser schema must already
+# exist in ADW. Do NOT attempt CREATE SCHEMA — this will fail
+# against an External Catalog with a 502 Bad Gateway error.
 AIDP_CATALOG    = "arganoadw_oacuser_sh"
 AIDP_SCHEMA     = "oacuser"
 AIDP_TABLE      = "OAC_CATALOG_ACL"
@@ -69,9 +105,9 @@ CATALOG_TYPES = [
 ]
 
 # ── Pagination & Rate Limiting ────────────────────────────────
-PAGE_SIZE            = 100   # Max items per API page
-RATE_LIMIT_WAIT      = 0.2   # Seconds between API calls
-TOKEN_REFRESH_BUFFER = 300   # Proactively refresh 5 min before expiry
+PAGE_SIZE            = 100
+RATE_LIMIT_WAIT      = 0.2
+TOKEN_REFRESH_BUFFER = 300
 
 print("=" * 50)
 print("  SECTION 1 COMPLETE: Imports & Configuration")
@@ -84,18 +120,42 @@ print("=" * 50)
 # ─────────────────────────────────────────────────────────────
 # SECTION 2: TOKEN MANAGER (Auto-Refresh via Refresh Token)
 # ─────────────────────────────────────────────────────────────
+# Manages the full OAuth 2.0 token lifecycle for OAC API calls.
+#
+# Why tokens.json instead of client credentials?
+#   The OAC Catalog/ACL APIs require a user-context Bearer
+#   token — client credentials (client_id + client_secret)
+#   alone are not sufficient. The simplest approach is to
+#   download tokens.json directly from the OAC Profile page,
+#   which requires no IDCS app configuration.
+#
+# How _load_tokens works:
+#   Reads accessToken and refreshToken from tokens.json.
+#   Decodes the JWT payload (no signature verification needed)
+#   to extract the exp claim, giving the exact expiry time.
+#   Both camelCase (accessToken) and snake_case (access_token)
+#   key formats are supported.
+#
+# How _refresh works:
+#   Calls the OAC refresh endpoint — NOT the IDCS token
+#   endpoint. This was a critical discovery during development:
+#   calling IDCS /oauth2/v1/token for refresh returns 401.
+#   The correct endpoint is on the OAC hostname:
+#     POST /api/dv/api/v1/tokens/token/refresh
+#     Authorization: Bearer <current_access_token>
+#     Content-Type: text/plain
+#     Body: <refresh_token> (plain text, not JSON)
+#   The _APPID suffix is stripped from CLIENT_ID before
+#   calling — the token endpoint expects the raw GUID only.
+#
+# How auto-refresh works:
+#   Every call to token_mgr.token checks time_remaining.
+#   If within TOKEN_REFRESH_BUFFER seconds of expiry, _refresh
+#   is called proactively before returning the token. This
+#   ensures no mid-extract API call uses an expired token.
+# ─────────────────────────────────────────────────────────────
 
 class OACTokenManager:
-    """
-    Manages OAuth 2.0 Bearer token lifecycle using tokens.json
-    downloaded from OAC Profile → Access Tokens → Download tokens.
-
-    - Loads access_token and refresh_token from tokens.json on init
-    - Decodes JWT exp claim to track expiry precisely
-    - Auto-refreshes via refresh_token grant before expiry
-    - No client_secret, username, or password required
-    - Strips _APPID suffix from CLIENT_ID for token endpoint calls
-    """
 
     def __init__(self, tokens_file):
         self._access_token  = None
@@ -104,12 +164,10 @@ class OACTokenManager:
         self._load_tokens(tokens_file)
 
     def _load_tokens(self, tokens_file):
-        """Load initial tokens from tokens.json and decode expiry."""
         import json, json as _json
         with open(tokens_file, "r") as f:
             data = json.load(f)
 
-        # Support both camelCase and snake_case key formats
         self._access_token  = data.get("access_token")  or data.get("accessToken")
         self._refresh_token = data.get("refresh_token") or data.get("refreshToken")
 
@@ -124,10 +182,9 @@ class OACTokenManager:
                 "   Ensure the token was downloaded (not just copied) from OAC Profile."
             )
 
-        # Decode JWT payload to read exp claim (no signature verification needed)
         try:
             payload = self._access_token.split(".")[1]
-            payload += "=" * (4 - len(payload) % 4)    # pad to valid base64 length
+            payload += "=" * (4 - len(payload) % 4)
             claims = _json.loads(base64.urlsafe_b64decode(payload))
             self._expires_at = claims.get("exp", 0)
             expiry_str = datetime.fromtimestamp(
@@ -143,21 +200,12 @@ class OACTokenManager:
             print("  Token expiry   : unknown (will refresh proactively)")
 
     def _refresh(self):
-        """
-        Refresh the access token using OAC's own token refresh endpoint.
-        This is NOT the IDCS /oauth2/v1/token endpoint.
-
-        OAC refresh flow (from tokens.json download instructions):
-          POST /api/dv/api/v1/tokens/token/refresh
-          Authorization: Bearer <current_access_token>
-          Content-Type: text/plain
-          Body: <refresh_token> (plain text)
-        """
-        refresh_url = f"{OAC_BASE_URL}/api/dv/api/v1/tokens/token/refresh"
+        refresh_url   = f"{OAC_BASE_URL}/api/dv/api/v1/tokens/token/refresh"
+        client_id_raw = CLIENT_ID.replace("_APPID", "")
 
         resp = requests.post(
             refresh_url,
-            data=self._refresh_token,          # plain text body
+            data=self._refresh_token,
             headers={
                 "Authorization": f"Bearer {self._access_token}",
                 "Content-Type":  "text/plain"
@@ -168,36 +216,29 @@ class OACTokenManager:
         if resp.status_code == 401:
             raise RuntimeError(
                 "❌ Refresh token rejected (401 Unauthorized).\n"
-                "   Your tokens.json has likely expired (refresh tokens expire ~3600s).\n"
+                "   Your tokens.json has likely expired (tokens expire ~3600s).\n"
                 "   Fix: OAC → Profile → Access Tokens → Download tokens\n"
                 "        Re-upload tokens.json to /Workspace/Shared/ and re-run."
             )
         resp.raise_for_status()
         data = resp.json()
 
-        # OAC returns camelCase keys
-        self._access_token  = data.get("accessToken")  or data.get("access_token")
+        self._access_token = data.get("accessToken") or data.get("access_token")
         if not self._access_token:
             raise ValueError(f"❌ Refresh response missing accessToken. Response: {data}")
 
-        # Update refresh token if a new one is returned
-        if "refreshToken" in data:
-            self._refresh_token = data["refreshToken"]
-        elif "refresh_token" in data:
-            self._refresh_token = data["refresh_token"]
+        if "refreshToken"  in data: self._refresh_token = data["refreshToken"]
+        elif "refresh_token" in data: self._refresh_token = data["refresh_token"]
 
-        # OAC refresh response may not include expires_in — default to 3600
         expires_in       = int(data.get("expiresIn") or data.get("expires_in") or 3600)
         self._expires_at = time.time() + expires_in
         expiry_str = datetime.fromtimestamp(
             self._expires_at, tz=timezone.utc
         ).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"🔑 Token refreshed via OAC endpoint. "
-              f"Valid for {expires_in}s → expires at {expiry_str}")
+        print(f"🔑 Token refreshed. Valid for {expires_in}s → expires at {expiry_str}")
 
     @property
     def token(self):
-        """Return a valid access token, refreshing proactively if needed."""
         time_remaining = self._expires_at - time.time()
         if time_remaining <= TOKEN_REFRESH_BUFFER:
             print(f"⚠️  Token expiring in {int(time_remaining)}s — refreshing...")
@@ -215,7 +256,6 @@ class OACTokenManager:
         return max(0, int(self._expires_at - time.time()))
 
 
-# Instantiate — loads and validates tokens.json immediately
 print("Loading tokens.json...")
 token_mgr = OACTokenManager(TOKENS_FILE)
 print("=" * 50)
@@ -226,30 +266,55 @@ print("=" * 50)
 # ─────────────────────────────────────────────────────────────
 # SECTION 3: OAC API HELPERS
 # ─────────────────────────────────────────────────────────────
+# Three utility functions used by the extraction loop in
+# Section 4. All API calls go through these helpers so that
+# token refresh, error handling, and encoding logic are
+# defined once and reused consistently.
+#
+# get_headers():
+#   Returns the Authorization and Content-Type headers needed
+#   for every OAC REST API call. Calls token_mgr.token which
+#   triggers a proactive refresh if the token is near expiry.
+#   An optional token override is supported for testing.
+#
+# b64_encode_id():
+#   The OAC getACL endpoint requires catalog object paths to
+#   be Base64 URL-safe encoded before passing them as a URL
+#   path parameter. Standard base64 characters + and / are
+#   replaced with - and _ respectively, and trailing = padding
+#   is stripped. This is the mirror operation of the Silver
+#   layer's decode_base64_id UDF.
+#
+# get_catalog_items():
+#   Paginates through all items of a given catalog type using
+#   the OAC search endpoint with wildcard search=*.
+#   The oa-page-count response header tells the function how
+#   many pages exist so all items are retrieved regardless of
+#   catalog size. A rate limit sleep between pages prevents
+#   overwhelming the OAC API.
+#
+# get_acl_for_item():
+#   Calls the getACL action endpoint for a single catalog item.
+#   403 (forbidden) and 404 (not found) are handled silently —
+#   both return an empty list so the extraction continues.
+#   This covers cases where the calling user does not have
+#   permission to view an item's ACL, or the item was deleted
+#   between the catalog list call and the ACL call.
+# ─────────────────────────────────────────────────────────────
 
 def get_headers(token=None):
-    """Use token_mgr by default; accepts manual override for testing."""
     if token:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     return token_mgr.get_headers()
 
 
 def b64_encode_id(object_path):
-    """
-    Base64URL-safe encode a catalog object path/ID.
-    Required format for the OAC getACL endpoint.
-    """
     return base64.urlsafe_b64encode(
         object_path.encode("utf-8")
     ).decode("utf-8").rstrip("=")
 
 
 def get_catalog_items(catalog_type):
-    """
-    Paginate through all catalog items of a given type.
-    Reads oa-page-count response header to loop all pages.
-    Token auto-refreshes via token_mgr on every request.
-    """
     items = []
     page  = 1
     base  = f"{OAC_BASE_URL}/api/{OAC_API_VERSION}/catalog/{catalog_type}"
@@ -283,11 +348,6 @@ def get_catalog_items(catalog_type):
 
 
 def get_acl_for_item(catalog_type, item_id):
-    """
-    POST to getACL endpoint for a single catalog item.
-    item_id must already be base64url-encoded.
-    Returns list of ACL entries or empty list on 403/404.
-    """
     url  = f"{OAC_BASE_URL}/api/{OAC_API_VERSION}/catalog/{catalog_type}/{item_id}/actions/getACL"
     hdrs = get_headers()
     hdrs["Content-Length"] = "0"
@@ -308,13 +368,37 @@ print("=" * 50)
 # ─────────────────────────────────────────────────────────────
 # SECTION 4: EXTRACT — Fetch All Items + ACLs
 # ─────────────────────────────────────────────────────────────
+# The core extraction loop. For each catalog type, all items
+# are fetched first (paginated), then getACL is called for
+# each item individually. Results are flattened into a list
+# of dicts — one row per item+principal combination.
+#
+# Why one row per item+principal?
+#   Each catalog item can have multiple principals (users or
+#   roles) with different permission sets. A flat structure
+#   with one row per combination is the most query-friendly
+#   format for OAC reporting and SQL aggregation in Silver.
+#
+# Item metadata field names vary slightly by catalog type:
+#   - id vs objectId (connections use objectId)
+#   - path vs objectPath (same variation)
+#   - owner may be a dict with displayName or a plain string
+#   - lastModified vs modified (type-dependent)
+#   These variations are handled defensively with .get() chains.
+#
+# Items with no ACL entries:
+#   If getACL returns an empty list (403, 404, or genuinely
+#   empty), the item is still recorded with NULL permission
+#   fields. This preserves catalog coverage — an admin needs
+#   to know which items have no visible ACL as much as which
+#   ones do.
+#
+# EXTRACTED_AT is set once at the start of the function and
+#   stamped on every row so the full snapshot has a consistent
+#   extraction timestamp regardless of how long the loop takes.
+# ─────────────────────────────────────────────────────────────
 
 def extract_all_acls():
-    """
-    For each catalog type, fetches all items then calls getACL
-    per item. Returns a flat list — one row per item+principal.
-    Items with no ACL entries are recorded with NULL permission fields.
-    """
     all_records  = []
     extracted_at = datetime.now(tz=timezone.utc).isoformat()
 
@@ -390,18 +474,40 @@ print("=" * 50)
 # ─────────────────────────────────────────────────────────────
 # SECTION 5: LOAD — Write to ADW via AIDP External Catalog
 # ─────────────────────────────────────────────────────────────
+# Writes the extracted ACL records to ADW via the AIDP
+# External Catalog Spark connection. No wallet, no cx_Oracle,
+# no JDBC string required — Spark resolves the 3-part catalog
+# path through the External Catalog metadata layer.
+#
+# Key design decisions:
+#
+# No CREATE SCHEMA:
+#   Running spark.sql('CREATE SCHEMA IF NOT EXISTS ...') against
+#   an External ADW Catalog returns a 502 Bad Gateway from the
+#   AIDP Metastore service. The schema must pre-exist in ADW.
+#   This was discovered during initial development and is
+#   documented in docs/aidp-setup-notes.md.
+#
+# No Delta format:
+#   ADW External Catalogs do not support Delta table format.
+#   saveAsTable() without .format('delta') uses the default
+#   format for the catalog type, which ADW handles correctly.
+#
+# Full overwrite strategy:
+#   mode('overwrite') truncates and reloads on every run.
+#   This is appropriate because ACL permissions can change at
+#   any time — a full snapshot is more reliable than an
+#   incremental merge for a permissions audit use case.
+#   The table is small enough (~200 rows) that a full reload
+#   has negligible performance impact.
+#
+# overwriteSchema=true:
+#   Allows column additions between runs without requiring
+#   a manual DROP TABLE in ADW. Safe here because Bronze is
+#   always fully regenerated from the API on every run.
+# ─────────────────────────────────────────────────────────────
 
 def load_to_adw(records):
-    """
-    Writes ACL records to arganoadw_oacuser_sh.oacuser.OAC_CATALOG_ACL
-    via the AIDP External Catalog Spark connection.
-
-    KEY RULES for External ADW Catalogs:
-      - DO NOT use CREATE SCHEMA — schema must pre-exist in ADW
-      - DO NOT use .format("delta") — ADW does not support Delta tables
-      - Use saveAsTable() with 3-part name — Spark handles the JDBC write
-      - mode("overwrite") truncates and reloads on every run
-    """
     from pyspark.sql import SparkSession
     from pyspark.sql.types import (
         StructType, StructField, StringType, IntegerType
@@ -431,7 +537,6 @@ def load_to_adw(records):
 
     df = spark.createDataFrame(records, schema=schema)
 
-    # Write via External Catalog connection — no Delta, no CREATE SCHEMA
     (df.write
         .mode("overwrite")
         .option("overwriteSchema", "true")
@@ -453,6 +558,26 @@ print("=" * 50)
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 6: RUN PIPELINE
+# ─────────────────────────────────────────────────────────────
+# Orchestrates the three pipeline steps in sequence:
+#   [1/3] Auth    — validates token_mgr loaded successfully
+#                   and prints remaining token lifetime
+#   [2/3] Extract — calls extract_all_acls() which loops all
+#                   catalog types and returns flat record list
+#   [3/3] Load    — previews the DataFrame then calls
+#                   load_to_adw() to write to ADW
+#
+# The pandas preview before load serves two purposes:
+#   1. Visual confirmation the data looks correct before
+#      committing to ADW
+#   2. Shape check — if record count is 0 or unexpectedly low,
+#      stop here and investigate token validity and OAC
+#      permissions before proceeding to the write step
+#
+# tokens.json must be uploaded to /Workspace/Shared/ before
+# running this section. The token manager will print the
+# expiry time in Step 1 — if it shows 'Expired or expiring
+# soon', re-download tokens.json from OAC Profile first.
 # ─────────────────────────────────────────────────────────────
 
 print("=" * 60)

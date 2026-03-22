@@ -286,12 +286,55 @@ df_silver = (df_bronze
     )
 
     # 9. HAS_CREATED_DATE — flag rows missing creation date
+    #    ITEM_CREATED is blank on this OAC instance but is a
+    #    valid API field that may be populated on other OAC
+    #    instances or future API versions. The flag is kept
+    #    active so the column exists in Silver regardless.
+    #    See commented hooks below for timestamp casting and
+    #    age-based enrichments when the field is available.
     .withColumn("HAS_CREATED_DATE",
         F.when(
             F.col("ITEM_CREATED").isNull() | (F.col("ITEM_CREATED") == ""),
             F.lit(0)
         ).otherwise(F.lit(1))
     )
+
+    # ── ITEM_CREATED HOOKS (activate when field is populated) ──
+    #
+    # Hook A: Cast ITEM_CREATED string to proper timestamp
+    # Uncomment when ITEM_CREATED is reliably populated:
+    #
+    # .withColumn("ITEM_CREATED_TS",
+    #     F.to_timestamp(F.col("ITEM_CREATED"))
+    # )
+    #
+    # Hook B: Item age in days from creation to last modified
+    # Useful for identifying stale or orphaned catalog items.
+    # Requires Hook A to be active first:
+    #
+    # .withColumn("ITEM_AGE_DAYS",
+    #     F.datediff(
+    #         F.col("ITEM_MODIFIED_TS"),
+    #         F.col("ITEM_CREATED_TS")
+    #     )
+    # )
+    #
+    # Hook C: Age bucket label for report filtering
+    # Requires Hook B to be active first:
+    #
+    # .withColumn("ITEM_AGE_BUCKET",
+    #     F.when(F.col("ITEM_AGE_DAYS") <= 30,  "< 30 days")
+    #      .when(F.col("ITEM_AGE_DAYS") <= 90,  "30–90 days")
+    #      .when(F.col("ITEM_AGE_DAYS") <= 365, "90–365 days")
+    #      .otherwise("> 1 year")
+    # )
+    #
+    # Hook D: Add to final .select() when hooks A–C are active:
+    # F.col("ITEM_CREATED"),        # original string preserved
+    # F.col("ITEM_CREATED_TS"),     # proper timestamp
+    # F.col("ITEM_AGE_DAYS"),       # integer age
+    # F.col("ITEM_AGE_BUCKET"),     # label for OAC filtering
+    # ──────────────────────────────────────────────────────────
 
     # 10. DATA_QUALITY_FLAG — row-level completeness check
     .withColumn("DATA_QUALITY_FLAG",
@@ -314,6 +357,8 @@ df_silver = (df_bronze
         F.col("ITEM_PATH").alias("ITEM_PATH_RAW"),
         F.col("ITEM_OWNER"),
         F.col("ITEM_MODIFIED"),
+        F.col("ITEM_CREATED"),          # preserved raw — blank on this OAC instance
+                                        # (see Hook D above to activate enrichments)
         F.col("ACCOUNT_GUID"),
         F.col("ACCOUNT_TYPE"),
         F.col("ACCOUNT_NAME"),

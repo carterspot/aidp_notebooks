@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:\\\\Code\\\\aidp_notebooks\" remote -v)",
+      "Bash(git -C \"c:\\\\Code\\\\aidp_notebooks\" config --get core.worktree)"
+    ]
+  }
+}

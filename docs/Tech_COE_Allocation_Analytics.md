@@ -1,6 +1,6 @@
-# Tech COE Allocation Analytics — One-Pager
+# Tech COE Allocation Analytics
 
-*Turning the weekly allocation spreadsheet into a live view of team utilization, capacity, and demand.*
+*Turning the weekly allocation spreadsheet into an analytics view of team utilization, capacity, and demand.*
 
 ---
 
@@ -24,7 +24,7 @@ Weekly Excel  →  Bronze notebook  →  TECH_COE_ALLOCATIONS  →  Gold noteboo
 - **Capacity baseline:** **40 hours/week** per person (one adjustable setting).
 - **Time off is handled correctly:** Holidays and PTO are booked on project lines, so they are split out and **excluded from billable utilization** and from project rankings.
 
-## What leadership sees
+## Key metrics available
 
 | Metric | Plain-English meaning |
 |---|---|
@@ -36,7 +36,7 @@ Weekly Excel  →  Bronze notebook  →  TECH_COE_ALLOCATIONS  →  Gold noteboo
 | **Key-person risk** | Projects staffed by a single person (bus-factor of one). |
 | **Demand forecast** | Directional trend of billable hours per department, projected 8 weeks out. |
 
-## How to use it
+## How to read it
 
 - **Staffing & sales:** read **bench hours** and **net utilization** for the next 8–12 weeks to see who can take on new work.
 - **Delivery risk:** watch **over-allocated people** (booked beyond available capacity) and **key-person-risk** projects.

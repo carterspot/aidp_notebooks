@@ -44,6 +44,37 @@ Person-level equivalents on `UTILIZATION PERSON WEEK` use `"Capacity Hours"` / `
 | Soft | 50–75% | 🟡 Amber |
 | Under-utilized | < 50% | 🔴 Red |
 
+### Color palette
+Apply these as the workbook theme so every canvas matches.
+
+**Core**
+| Role | Hex |
+|---|---|
+| Navy (header, headings) | `#0b3d63` |
+| Navy 2 (default chip) | `#15568a` |
+| Rail (left filter bg) | `#0e2c47` |
+| Body text | `#1a2530` |
+| Secondary text | `#64748b` |
+| Borders | `#d9e2ec` · bg `#eef2f6` · card `#ffffff` |
+
+**Threshold (conditional formatting)**
+| Band | Hex |
+|---|---|
+| 🟢 Healthy 75–100% | `#1f9d61` (lighter `#37b377`) |
+| 🟡 Soft 50–75% | `#e0a106` |
+| 🔴 Under/over (<50 or >100) | `#d8453a` |
+
+**Series & viz-type chips**
+| Element | Hex |
+|---|---|
+| Primary blue (bar/line/billable) | `#1d6fb8` (gradient top `#3b86c6`) |
+| Time-off segment | `#e0a106` |
+| Bench / neutral segment | `#b8c4d0` |
+| KPI chip | `#0a7d52` · Line `#1d6fb8` · Bar `#6b4fa0` |
+| Heat `#b5651d` · Stacked `#8a3b6b` · Table `#3a4856` · Area `#0e7c86` |
+
+> Top 5 if theming OAC: navy `#0b3d63`, primary blue `#1d6fb8`, green `#1f9d61`, amber `#e0a106`, red `#d8453a`.
+
 ---
 
 ## Tab 1 — Executive Summary

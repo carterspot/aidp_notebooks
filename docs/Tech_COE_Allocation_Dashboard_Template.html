@@ -4,6 +4,24 @@
 <meta charset="utf-8">
 <title>Tech COE Allocation — Dashboard UI Template</title>
 <style>
+  /* ============================================================
+     COLOR PALETTE REFERENCE
+     ------------------------------------------------------------
+     Core:      navy   #0b3d63   header bg, headings
+                navy2  #15568a   default viz chip
+                rail   #0e2c47   left filter rail
+                ink    #1a2530   body text
+                muted  #64748b   secondary text
+                line   #d9e2ec   borders        bg #eef2f6  card #ffffff
+     Thresholds (reuse for conditional formatting):
+                healthy 75-100%  #1f9d61   (heat-light #37b377)
+                soft    50-75%   #e0a106
+                under/over <50|>100  #d8453a
+     Viz chips: KPI #0a7d52  Line #1d6fb8  Bar #6b4fa0  Heat #b5651d
+                Stacked #8a3b6b  Table #3a4856  Area #0e7c86
+     Series:    primary blue #1d6fb8 (grad top #3b86c6) · time-off #e0a106
+                bench/neutral #b8c4d0 · forecast note bg #fdf4dc
+     ============================================================ */
   :root{
     --navy:#0b3d63; --navy2:#15568a; --ink:#1a2530; --muted:#64748b;
     --line:#d9e2ec; --bg:#eef2f6; --card:#ffffff; --rail:#0e2c47;

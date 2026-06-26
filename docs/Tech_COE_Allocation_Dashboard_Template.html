@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tech COE Allocation — Dashboard UI Template</title>
+<style>
+  :root{
+    --navy:#0b3d63; --navy2:#15568a; --ink:#1a2530; --muted:#64748b;
+    --line:#d9e2ec; --bg:#eef2f6; --card:#ffffff; --rail:#0e2c47;
+    --green:#1f9d61; --amber:#e0a106; --red:#d8453a; --chip:#e7eef5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--bg);font-size:13px}
+  /* header */
+  header{background:var(--navy);color:#fff;padding:10px 18px;display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:5}
+  header .logo{font-weight:700;font-size:15px;letter-spacing:.2px}
+  header .logo span{opacity:.7;font-weight:400}
+  nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:6px}
+  nav button{background:transparent;border:0;color:#cfe0ee;padding:7px 12px;border-radius:6px 6px 0 0;cursor:pointer;font-size:12.5px}
+  nav button:hover{background:#11456e;color:#fff}
+  nav button.active{background:var(--bg);color:var(--navy);font-weight:600}
+  .topright{margin-left:auto;display:flex;gap:10px;opacity:.85;font-size:12px}
+  /* layout */
+  .shell{display:flex;min-height:calc(100vh - 44px)}
+  .rail{width:210px;background:var(--rail);color:#cdd9e5;padding:14px 12px;flex:none}
+  .rail h4{margin:0 0 4px;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  .rail .hint{font-size:10.5px;color:#8fa6bb;margin-bottom:14px}
+  .filter{margin-bottom:12px}
+  .filter label{display:block;font-size:11px;color:#9fb4c8;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px}
+  .control{background:#16385a;border:1px solid #25527c;border-radius:6px;padding:7px 9px;color:#dbe7f2;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+  .control.small{padding:5px 8px;font-size:11px}
+  .pill{display:inline-block;background:#1d6fb8;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;margin:2px 3px 0 0}
+  .pin{font-size:10px;color:#7fd1a8;margin-top:6px}
+  .main{flex:1;padding:16px 18px;overflow:auto}
+  .canvas{display:none}
+  .canvas.active{display:block}
+  .pagehead{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .pagehead h1{font-size:18px;margin:0;color:var(--navy)}
+  .pagehead .aud{font-size:11.5px;color:var(--muted)}
+  .qline{font-size:12px;color:var(--muted);margin:0 0 12px;font-style:italic}
+  /* horizontal detail filters */
+  .hfilters{background:#dde8f1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .hfilters .tag{font-size:10.5px;color:var(--navy);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-right:4px}
+  .hchip{background:#fff;border:1px solid #bcd0e2;border-radius:14px;padding:4px 10px;font-size:11.5px;color:#234}
+  .hchip b{color:var(--navy)}
+  /* grid */
+  .row{display:grid;gap:12px;margin-bottom:12px}
+  .kpis{grid-template-columns:repeat(5,1fr)}
+  .c2{grid-template-columns:1fr 1fr}
+  .c12{grid-template-columns:2fr 1fr}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-height:60px}
+  .card .ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .card .ch .t{font-weight:600;font-size:12.5px;color:#22303c}
+  .viz{font-size:10px;font-weight:700;color:#fff;background:var(--navy2);border-radius:4px;padding:2px 7px;letter-spacing:.3px;white-space:nowrap}
+  .viz.kpi{background:#0a7d52}.viz.line{background:#1d6fb8}.viz.bar{background:#6b4fa0}
+  .viz.heat{background:#b5651d}.viz.stk{background:#8a3b6b}.viz.tbl{background:#3a4856}.viz.area{background:#0e7c86}
+  .fields{font-size:10.5px;color:var(--muted);margin-top:8px;border-top:1px dashed var(--line);padding-top:6px}
+  .fields b{color:#33506b}
+  /* kpi tile */
+  .kpi-tile .num{font-size:26px;font-weight:700;color:var(--navy);line-height:1.1}
+  .kpi-tile .lab{font-size:11px;color:var(--muted);margin-top:2px}
+  .kpi-tile .sub{font-size:10.5px;color:#8a97a4;margin-top:3px}
+  .kpi-tile.alert .num{color:var(--red)}
+  /* mini sketches */
+  .bars{display:flex;align-items:flex-end;gap:7px;height:90px;padding-top:6px}
+  .bars .b{flex:1;background:linear-gradient(#3b86c6,#1d6fb8);border-radius:3px 3px 0 0;position:relative}
+  .bars .b span{position:absolute;top:-15px;left:0;right:0;text-align:center;font-size:9px;color:#5a6b7a}
+  .bars .b small{position:absolute;bottom:-15px;left:0;right:0;text-align:center;font-size:9px;color:#7a8896}
+  .bars .b.g{background:linear-gradient(#37b377,#1f9d61)} .bars .b.a{background:linear-gradient(#f0bd3e,#e0a106)} .bars .b.r{background:linear-gradient(#e8675d,#d8453a)}
+  svg{display:block;width:100%;height:120px}
+  .heat{display:grid;grid-template-columns:90px repeat(7,1fr);gap:3px;font-size:10px}
+  .heat .hd{color:#5a6b7a;text-align:center;padding:2px}
+  .heat .rl{color:#33506b;font-weight:600;display:flex;align-items:center}
+  .heat .cell{height:24px;border-radius:3px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 7px;text-align:left}
+  th{color:#5a6b7a;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px}
+  td.r,th.r{text-align:right}
+  .b-red{color:var(--red);font-weight:700}.b-grn{color:var(--green);font-weight:700}.b-amb{color:var(--amber);font-weight:700}
+  .flag{background:var(--red);color:#fff;border-radius:10px;padding:1px 7px;font-size:10px}
+  .stk{display:flex;height:90px;align-items:flex-end;gap:10px;padding-top:6px}
+  .stk .col{flex:1;display:flex;flex-direction:column-reverse;border-radius:3px;overflow:hidden}
+  .stk .s1{background:#1d6fb8}.stk .s2{background:#e0a106}.stk .s3{background:#b8c4d0}
+  .stk small{display:block;text-align:center;font-size:9px;color:#7a8896;margin-top:4px}
+  .legend{display:flex;gap:14px;align-items:center;font-size:10.5px;color:#5a6b7a;margin-top:6px;flex-wrap:wrap}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .note{font-size:11px;color:#7a5c12;background:#fdf4dc;border:1px solid #f0d486;border-radius:6px;padding:7px 10px;margin-top:10px}
+  .footer{font-size:10.5px;color:#8a97a4;padding:8px 18px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Tech COE Allocation <span>· Dashboard</span></div>
+  <nav id="nav">
+    <button data-tab="t1" class="active">1 · Executive</button>
+    <button data-tab="t2">2 · Utilization</button>
+    <button data-tab="t3">3 · Bench</button>
+    <button data-tab="t4">4 · Over-Alloc &amp; Risk</button>
+    <button data-tab="t5">5 · Projects</button>
+    <button data-tab="t6">6 · Forecast</button>
+  </nav>
+  <div class="topright"><span>◐ Visualize</span><span>↻ refreshed weekly</span></div>
+</header>
+
+<div class="shell">
+  <!-- LEFT VERTICAL FILTER RAIL (global, pinned to all canvases) -->
+  <aside class="rail">
+    <h4>Filters</h4>
+    <div class="hint">Global · pinned to every canvas</div>
+    <div class="filter"><label>Department</label><div class="control">All <span>▾</span></div>
+      <span class="pill">ERP</span><span class="pill">HCM</span><span class="pill">Analytics</span><span class="pill">WMS-OTM</span></div>
+    <div class="filter"><label>Week Start Date</label><div class="control small">Next 8–12 wks <span>▾</span></div>
+      <div class="pin">⮞ default: near-term window</div></div>
+    <div class="filter"><label>Year Month</label><div class="control small">2026-Jun … 2027-Jun <span>▾</span></div></div>
+    <div class="filter"><label>Arganaut</label><div class="control small">All <span>▾</span></div></div>
+    <div class="filter"><label>Hours Type</label><div class="control small">Billable + Time off <span>▾</span></div></div>
+  </aside>
+
+  <div class="main">
+
+    <!-- ===================== TAB 1: EXECUTIVE ===================== -->
+    <section class="canvas active" id="t1">
+      <div class="pagehead"><h1>Executive Summary</h1><span class="aud">· Leadership</span></div>
+      <p class="qline">How utilized are we, and where is the open capacity?</p>
+
+      <div class="row kpis">
+        <div class="card kpi-tile"><div class="ch"><span class="viz kpi">KPI</span></div><div class="num">87%</div><div class="lab">Net Utilization</div><div class="sub">billable ÷ available</div></div>
+        <div class="card kpi-tile"><div class="ch"><span class="viz kpi">KPI</span></div><div class="num">83%</div><div class="lab">Gross Utilization</div><div class="sub">billable ÷ 40</div></div>
+        <div class="card kpi-tile"><div class="ch"><span class="viz kpi">KPI</span></div><div class="num">3.4k</div><div class="lab">Bench Hours</div><div class="sub">sellable idle</div></div>
+        <div class="card kpi-tile alert"><div class="ch"><span class="viz kpi">KPI</span></div><div class="num">4</div><div class="lab">Over-Allocated</div><div class="sub">people this week</div></div>
+        <div class="card kpi-tile"><div class="ch"><span class="viz kpi">KPI</span></div><div class="num">112</div><div class="lab">Roster</div><div class="sub">active Arganauts</div></div>
+      </div>
+
+      <div class="row c12">
+        <div class="card">
+          <div class="ch"><span class="t">Coverage Cliff — Net Utilization by Month</span><span class="viz line">LINE + ref</span></div>
+          <svg viewBox="0 0 400 120" preserveAspectRatio="none">
+            <line x1="0" y1="34" x2="400" y2="34" stroke="#d8453a" stroke-dasharray="4 4" stroke-width="1"/>
+            <text x="2" y="30" font-size="8" fill="#d8453a">target 80%</text>
+            <polyline fill="none" stroke="#1d6fb8" stroke-width="2.5"
+              points="6,18 36,30 66,42 96,52 126,62 156,70 186,84 216,98 246,104 276,108 306,112 336,114 366,116"/>
+          </svg>
+          <div class="fields"><b>X</b> Year Month · <b>Y</b> Net Util % (calc) · <b>ref</b> 80% target line</div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="t">Utilization by Department</span><span class="viz bar">BAR</span></div>
+          <div class="bars">
+            <div class="b r" style="height:35%"><span>35%</span><small>HCM</small></div>
+            <div class="b a" style="height:45%"><span>45%</span><small>ERP</small></div>
+            <div class="b a" style="height:45%"><span>45%</span><small>Anlt</small></div>
+            <div class="b a" style="height:48%"><span>48%</span><small>WMS</small></div>
+          </div>
+          <div class="fields"><b>X</b> Department · <b>Y</b> Net Util % · <b>color</b> threshold</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Bench Hours by Month</span><span class="viz bar">BAR</span></div>
+          <div class="bars">
+            <div class="b" style="height:14%"><small>Jun</small></div><div class="b" style="height:20%"><small>Jul</small></div>
+            <div class="b" style="height:34%"><small>Aug</small></div><div class="b" style="height:42%"><small>Sep</small></div>
+            <div class="b" style="height:48%"><small>Oct</small></div><div class="b" style="height:60%"><small>Nov</small></div>
+            <div class="b" style="height:66%"><small>Dec</small></div><div class="b" style="height:78%"><small>Jan</small></div>
+            <div class="b" style="height:88%"><small>Feb</small></div><div class="b" style="height:96%"><small>Mar</small></div>
+          </div>
+          <div class="fields"><b>X</b> Year Month · <b>Y</b> Bench Hours (= SUM Nonbillable Hours) — shows when capacity opens up</div>
+        </div>
+      </div>
+      <div class="legend"><span><span class="sw" style="background:var(--green)"></span>75–100% healthy</span><span><span class="sw" style="background:var(--amber)"></span>50–75% soft</span><span><span class="sw" style="background:var(--red)"></span>&lt;50% or &gt;100%</span></div>
+    </section>
+
+    <!-- ===================== TAB 2: UTILIZATION ===================== -->
+    <section class="canvas" id="t2">
+      <div class="pagehead"><h1>Utilization &amp; Capacity</h1><span class="aud">· Practice leads</span></div>
+      <p class="qline">Gross vs net, and where is the capacity going?</p>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Department × Month — Net Utilization</span><span class="viz heat">HEAT MAP</span></div>
+          <div class="heat">
+            <div class="hd"></div><div class="hd">Jun</div><div class="hd">Jul</div><div class="hd">Aug</div><div class="hd">Sep</div><div class="hd">Oct</div><div class="hd">Nov</div><div class="hd">Dec</div>
+            <div class="rl">ERP</div><div class="cell" style="background:#1f9d61">90</div><div class="cell" style="background:#1f9d61">85</div><div class="cell" style="background:#37b377">76</div><div class="cell" style="background:#e0a106">66</div><div class="cell" style="background:#e0a106">60</div><div class="cell" style="background:#e0a106">54</div><div class="cell" style="background:#d8453a">44</div>
+            <div class="rl">HCM</div><div class="cell" style="background:#37b377">78</div><div class="cell" style="background:#e0a106">70</div><div class="cell" style="background:#e0a106">58</div><div class="cell" style="background:#e0a106">52</div><div class="cell" style="background:#d8453a">46</div><div class="cell" style="background:#d8453a">40</div><div class="cell" style="background:#d8453a">33</div>
+            <div class="rl">Analytics</div><div class="cell" style="background:#1f9d61">93</div><div class="cell" style="background:#1f9d61">88</div><div class="cell" style="background:#37b377">75</div><div class="cell" style="background:#e0a106">64</div><div class="cell" style="background:#e0a106">58</div><div class="cell" style="background:#d8453a">48</div><div class="cell" style="background:#d8453a">40</div>
+            <div class="rl">WMS-OTM</div><div class="cell" style="background:#1f9d61">95</div><div class="cell" style="background:#37b377">80</div><div class="cell" style="background:#e0a106">64</div><div class="cell" style="background:#e0a106">55</div><div class="cell" style="background:#d8453a">47</div><div class="cell" style="background:#d8453a">38</div><div class="cell" style="background:#d8453a">30</div>
+          </div>
+          <div class="fields"><b>Rows</b> Department · <b>Cols</b> Year Month · <b>Color</b> Net Util % (threshold palette)</div>
+        </div>
+      </div>
+
+      <div class="row c2">
+        <div class="card">
+          <div class="ch"><span class="t">Gross vs Net Utilization Trend</span><span class="viz line">LINE (2-series)</span></div>
+          <svg viewBox="0 0 400 120" preserveAspectRatio="none">
+            <polyline fill="none" stroke="#1d6fb8" stroke-width="2.5" points="6,22 46,34 86,48 126,58 166,66 206,76 246,90 286,100 326,108 366,114"/>
+            <polyline fill="none" stroke="#0a7d52" stroke-width="2.5" stroke-dasharray="5 3" points="6,14 46,26 86,40 126,50 166,58 206,68 246,84 286,96 326,106 366,112"/>
+          </svg>
+          <div class="legend"><span><span class="sw" style="background:#1d6fb8"></span>Gross %</span><span><span class="sw" style="background:#0a7d52"></span>Net %</span></div>
+          <div class="fields"><b>X</b> Year Month · <b>Y</b> Gross % &amp; Net % (calcs)</div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="t">Capacity Breakdown</span><span class="viz stk">STACKED BAR</span></div>
+          <div class="stk">
+            <div><div class="col"><div class="s1" style="height:62px"></div><div class="s2" style="height:6px"></div><div class="s3" style="height:14px"></div></div><small>Jun</small></div>
+            <div><div class="col"><div class="s1" style="height:55px"></div><div class="s2" style="height:8px"></div><div class="s3" style="height:20px"></div></div><small>Jul</small></div>
+            <div><div class="col"><div class="s1" style="height:44px"></div><div class="s2" style="height:6px"></div><div class="s3" style="height:34px"></div></div><small>Aug</small></div>
+            <div><div class="col"><div class="s1" style="height:34px"></div><div class="s2" style="height:5px"></div><div class="s3" style="height:46px"></div></div><small>Sep</small></div>
+            <div><div class="col"><div class="s1" style="height:26px"></div><div class="s2" style="height:4px"></div><div class="s3" style="height:56px"></div></div><small>Oct</small></div>
+          </div>
+          <div class="legend"><span><span class="sw" style="background:#1d6fb8"></span>Billable</span><span><span class="sw" style="background:#e0a106"></span>Time off</span><span><span class="sw" style="background:#b8c4d0"></span>Bench</span></div>
+          <div class="fields"><b>X</b> Year Month · <b>Y</b> hours · <b>stack</b> Billable / Time Off / Bench (= capacity)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB 3: BENCH (DETAIL) ===================== -->
+    <section class="canvas" id="t3">
+      <div class="pagehead"><h1>Bench &amp; Availability</h1><span class="aud">· Sales / Resourcing</span></div>
+      <p class="qline">Who can take on new work, and when?</p>
+
+      <div class="hfilters">
+        <span class="tag">Page filters</span>
+        <span class="hchip"><b>Is On Bench</b> = 1</span>
+        <span class="hchip"><b>Net Util %</b> &lt; 50</span>
+        <span class="hchip">Department: <b>All</b></span>
+        <span class="hchip">Week: <b>next 12 wks</b></span>
+        <span class="hchip">Sort: <b>Available Cap ▾</b></span>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Bench Hours by Department × Week</span><span class="viz area">STACKED AREA</span></div>
+          <svg viewBox="0 0 400 110" preserveAspectRatio="none">
+            <polygon fill="#bcd0e2" points="0,110 0,86 50,80 100,70 150,60 200,50 250,40 300,30 350,22 400,16 400,110"/>
+            <polygon fill="#8fb4d6" points="0,110 0,96 50,92 100,86 150,80 200,72 250,64 300,56 350,50 400,44 400,110"/>
+            <polygon fill="#1d6fb8" points="0,110 0,104 50,102 100,99 150,95 200,90 250,85 300,80 350,76 400,72 400,110"/>
+          </svg>
+          <div class="fields"><b>X</b> Week Start Date (next 12) · <b>Y</b> Bench Hours · <b>color</b> Department — runway view</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Available People</span><span class="viz tbl">TABLE</span></div>
+          <table>
+            <thead><tr><th>Arganaut</th><th>Dept</th><th>Week</th><th class="r">Billable</th><th class="r">Avail Cap</th><th class="r">Net Util%</th></tr></thead>
+            <tbody>
+              <tr><td>Gopi Dandamudi</td><td>Analytics</td><td>2026-Jul</td><td class="r">12.0</td><td class="r">24.0</td><td class="r b-amb">50.0</td></tr>
+              <tr><td>Martin Myers</td><td>Analytics</td><td>2026-Jul</td><td class="r">8.0</td><td class="r">16.0</td><td class="r b-amb">50.0</td></tr>
+              <tr><td>Priya N.</td><td>HCM</td><td>2026-Aug</td><td class="r">6.0</td><td class="r">34.0</td><td class="r b-red">15.0</td></tr>
+              <tr><td>James K.</td><td>ERP</td><td>2026-Aug</td><td class="r">0.0</td><td class="r">40.0</td><td class="r b-red">0.0</td></tr>
+            </tbody>
+          </table>
+          <div class="fields"><b>Dataset</b> UTILIZATION PERSON WEEK · <b>filter</b> Is On Bench = 1 or Net Util % &lt; 50</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB 4: OVER-ALLOC & RISK (DETAIL) ===================== -->
+    <section class="canvas" id="t4">
+      <div class="pagehead"><h1>Over-Allocation &amp; Risk</h1><span class="aud">· Delivery</span></div>
+      <p class="qline">Who's overbooked, and what's fragile?</p>
+
+      <div class="hfilters">
+        <span class="tag">Page filters</span>
+        <span class="hchip"><b>Is Over Allocated</b> = 1</span>
+        <span class="hchip">Department: <b>All</b></span>
+        <span class="hchip">Week: <b>next 8 wks</b></span>
+        <span class="hchip"><b>Is Key Person Risk</b> = 1</span>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Over-Allocated People</span><span class="viz tbl">TABLE</span></div>
+          <table>
+            <thead><tr><th>Arganaut</th><th>Dept</th><th>Week</th><th class="r">Billable</th><th class="r">Avail Cap</th><th class="r">Net Util%</th></tr></thead>
+            <tbody>
+              <tr><td>Juan Marcelo Garay</td><td>Analytics</td><td>2026-Jul</td><td class="r">36.0</td><td class="r">24.0</td><td class="r b-red">150.0</td></tr>
+              <tr><td>Russell Bruce</td><td>Analytics</td><td>2026-Jul</td><td class="r">28.0</td><td class="r">16.0</td><td class="r b-red">175.0</td></tr>
+              <tr><td>Juan Marcelo Garay</td><td>Analytics</td><td>2026-Jun</td><td class="r">24.0</td><td class="r">16.0</td><td class="r b-red">150.0</td></tr>
+              <tr><td>Russell Bruce</td><td>Analytics</td><td>2026-Jun</td><td class="r">28.0</td><td class="r">16.0</td><td class="r b-red">175.0</td></tr>
+            </tbody>
+          </table>
+          <div class="fields"><b>Dataset</b> UTILIZATION PERSON WEEK · <b>filter</b> Is Over Allocated = 1 · billable &gt; available</div>
+        </div>
+      </div>
+
+      <div class="row c2">
+        <div class="card">
+          <div class="ch"><span class="t">Over-Allocation Count by Dept × Week</span><span class="viz bar">BAR</span></div>
+          <div class="bars">
+            <div class="b r" style="height:60%"><span>2</span><small>Anlt</small></div>
+            <div class="b r" style="height:30%"><span>1</span><small>ERP</small></div>
+            <div class="b r" style="height:30%"><span>1</span><small>HCM</small></div>
+            <div class="b" style="height:8%"><span>0</span><small>WMS</small></div>
+          </div>
+          <div class="fields"><b>X</b> Department · <b>Y</b> SUM(Is Over Allocated) · pin to a selected week</div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="t">Key-Person-Risk Projects</span><span class="viz tbl">TABLE</span></div>
+          <table>
+            <thead><tr><th>Project</th><th class="r">People</th><th class="r">Hours</th><th>Risk</th></tr></thead>
+            <tbody>
+              <tr><td>A4O Homebuilder Solution</td><td class="r">1</td><td class="r">2,758</td><td><span class="flag">KEY</span></td></tr>
+              <tr><td>ORC-SRC-Cutco Phase 2</td><td class="r">1</td><td class="r">1,940</td><td><span class="flag">KEY</span></td></tr>
+              <tr><td>Met Govt Qtr Support</td><td class="r">2</td><td class="r">2,808</td><td>—</td></tr>
+            </tbody>
+          </table>
+          <div class="fields"><b>Dataset</b> PROJECT RISK · <b>filter</b> Is Key Person Risk = 1 · sort Total Hours ▾</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB 5: PROJECTS (DETAIL) ===================== -->
+    <section class="canvas" id="t5">
+      <div class="pagehead"><h1>Projects &amp; Demand</h1><span class="aud">· Leadership / Delivery</span></div>
+      <p class="qline">Where is the work, and how is it ramping?</p>
+
+      <div class="hfilters">
+        <span class="tag">Page filters</span>
+        <span class="hchip">Project: <b>All</b></span>
+        <span class="hchip">Department: <b>All</b></span>
+        <span class="hchip"><b>Hours Type</b> = Billable</span>
+        <span class="hchip">Top: <b>15 by hours</b></span>
+        <span class="hchip">Week range: <b>full horizon</b></span>
+      </div>
+
+      <div class="row c2">
+        <div class="card">
+          <div class="ch"><span class="t">Top 15 Projects by Scheduled Hours</span><span class="viz bar">BAR (horiz)</span></div>
+          <table>
+            <thead><tr><th>Project</th><th class="r">Hours</th><th class="r">People</th></tr></thead>
+            <tbody>
+              <tr><td>Hillman — Cloud Rollout HS Canada</td><td class="r">11,841</td><td class="r">13</td></tr>
+              <tr><td>Laureate — Cloud ERP</td><td class="r">10,901</td><td class="r">9</td></tr>
+              <tr><td>Metro — ERP+EPM+HCM Support</td><td class="r">10,178</td><td class="r">5</td></tr>
+              <tr><td>Hunter — JDE2Cloud 2025</td><td class="r">9,923</td><td class="r">7</td></tr>
+              <tr><td>Gentex — OM &amp; CPQ migration</td><td class="r">9,581</td><td class="r">11</td></tr>
+            </tbody>
+          </table>
+          <div class="fields"><b>Dataset</b> PROJECT RISK · <b>Y</b> Total Scheduled Hours · <b>color</b> Is Key Person Risk</div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="t">Project Demand Over Time</span><span class="viz area">STACKED AREA</span></div>
+          <svg viewBox="0 0 400 120" preserveAspectRatio="none">
+            <polygon fill="#1d6fb8" points="0,120 0,40 60,44 120,52 180,64 240,78 300,92 360,104 400,110 400,120"/>
+            <polygon fill="#6b4fa0" points="0,120 0,70 60,72 120,78 180,86 240,96 300,104 360,112 400,116 400,120"/>
+            <polygon fill="#0e7c86" points="0,120 0,96 60,98 120,102 180,106 240,110 300,114 360,117 400,118 400,120"/>
+          </svg>
+          <div class="fields"><b>Dataset</b> ALLOC PROJECT WEEK · <b>X</b> Week · <b>Y</b> Scheduled Hours · <b>stack</b> top projects</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Project Detail</span><span class="viz tbl">TABLE (drill)</span></div>
+          <table>
+            <thead><tr><th>Project</th><th>Dept</th><th class="r">People</th><th class="r">Active Wks</th><th class="r">Total Hrs</th><th>Risk</th></tr></thead>
+            <tbody>
+              <tr><td>Hillman</td><td>ERP</td><td class="r">13</td><td class="r">42</td><td class="r">11,841</td><td>—</td></tr>
+              <tr><td>Laureate</td><td>ERP</td><td class="r">9</td><td class="r">38</td><td class="r">10,901</td><td>—</td></tr>
+              <tr><td>A4O Homebuilder</td><td>HCM</td><td class="r">1</td><td class="r">14</td><td class="r">2,758</td><td><span class="flag">KEY</span></td></tr>
+            </tbody>
+          </table>
+          <div class="fields"><b>Dataset</b> PROJECT RISK / ALLOC DETAIL · drill to Arganaut × week via HOURS_TYPE</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB 6: FORECAST ===================== -->
+    <section class="canvas" id="t6">
+      <div class="pagehead"><h1>Forecast</h1><span class="aud">· Leadership</span></div>
+      <p class="qline">Which way is booked demand trending?</p>
+
+      <div class="row">
+        <div class="card">
+          <div class="ch"><span class="t">Billable Demand — Actual · Trend · 3-Wk MA</span><span class="viz line">LINE (3-series, trellis by Dept)</span></div>
+          <svg viewBox="0 0 400 150" preserveAspectRatio="none">
+            <line x1="300" y1="0" x2="300" y2="150" stroke="#cbd5e1" stroke-dasharray="3 3"/>
+            <text x="304" y="12" font-size="8" fill="#94a3b8">forecast →</text>
+            <polyline fill="none" stroke="#1d6fb8" stroke-width="2.5" points="6,30 56,34 106,40 156,52 206,66 256,84 300,96"/>
+            <polyline fill="none" stroke="#0a7d52" stroke-width="2" stroke-dasharray="5 3" points="6,40 56,42 106,46 156,54 206,64 256,78 300,90 350,96 396,100"/>
+            <polyline fill="none" stroke="#e0a106" stroke-width="2" points="256,84 300,86 350,88 396,90"/>
+          </svg>
+          <div class="legend"><span><span class="sw" style="background:#1d6fb8"></span>Actual billable</span><span><span class="sw" style="background:#0a7d52"></span>Trend</span><span><span class="sw" style="background:#e0a106"></span>3-Wk MA</span></div>
+          <div class="fields"><b>Dataset</b> DEPT FORECAST · <b>X</b> Week · <b>Y</b> hours · <b>trellis</b> Department · split at Is Forecast = 1</div>
+          <div class="note">⚠ The linear <b>Trend</b> collapses over the long horizon (the coverage cliff drags the slope to 0). Read the <b>3-Wk MA</b> as the near-term signal. A recent-window trend fix is a pending notebook enhancement (gold §7).</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="footer">UI template for <b>tech_coe_allocation_gold</b> datasets · vertical global filters (left) · horizontal page filters on detail tabs (3·4·5) · viz types are recommendations. Numbers illustrative.</div>
+
+<script>
+  const nav = document.getElementById('nav');
+  nav.addEventListener('click', e => {
+    const b = e.target.closest('button'); if(!b) return;
+    document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.canvas').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    document.getElementById(b.dataset.tab).classList.add('active');
+  });
+</script>
+</body>
+</html>
